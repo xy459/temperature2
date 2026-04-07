@@ -27,6 +27,8 @@ import sys
 import os
 import csv
 
+UTC = datetime.timezone.utc
+
 API_KEY = "e1f10a1e78da46f5b10a1e78da96f525"
 STATION = "LEMD"
 V3_URL = f"https://api.weather.com/v3/wx/observations/current?apiKey={API_KEY}&language=en-US&units=m&format=json&icaoCode={STATION}"
@@ -68,7 +70,11 @@ def load_csv(path):
 
 
 def utcnow():
-    return datetime.datetime.utcnow()
+    return datetime.datetime.now(UTC).replace(tzinfo=None)
+
+
+def from_epoch(epoch):
+    return datetime.datetime.fromtimestamp(epoch, UTC).replace(tzinfo=None)
 
 
 def ts(dt):
@@ -195,7 +201,7 @@ class METARPredictor:
             return False
 
         self.last_v3_epoch = epoch
-        obs_time = datetime.datetime.utcfromtimestamp(epoch)
+        obs_time = from_epoch(epoch)
         temp = data.get('temperature')
         max7am = data.get('temperatureMaxSince7Am')
         dewpt = data.get('temperatureDewPoint')
@@ -305,7 +311,7 @@ class METARPredictor:
 
         for obs in observations:
             metar_epoch = obs.get('valid_time_gmt', 0)
-            metar_time = datetime.datetime.utcfromtimestamp(metar_epoch)
+            metar_time = from_epoch(metar_epoch)
             metar_time_str = ts(metar_time)
             metar_temp = obs.get('temp')
 
