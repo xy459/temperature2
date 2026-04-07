@@ -291,31 +291,24 @@ func fetchV1(ctx context.Context, client *http.Client, station string) (*V1Respo
 
 func getPollInterval(baseInterval int) time.Duration {
 	now := time.Now().UTC()
-	minPast := now.Minute() % 30
-	secPast := minPast*60 + now.Second()
+	// Observations arrive every ~10 minutes (at :X0 ± ~2 min)
+	// Use a 10-minute cycle: dense near each :X0 boundary
+	secInCycle := (now.Minute()%10)*60 + now.Second() // 0-599 within 10-min cycle
 
-	// Dense window: :50-:10 and :20-:40 (around :00 and :30)
-	// METAR observations arrive roughly ±7 min around :00/:30
 	switch {
-	case secPast <= 600: // 0-10 min past boundary: just after expected METAR
-		if secPast <= 120 {
-			return time.Duration(baseInterval) * time.Second // densest
+	case secInCycle <= 180: // 0-3 min past :X0 — just after expected observation
+		if secInCycle <= 60 {
+			return time.Duration(baseInterval) * time.Second // densest: first 60s
 		}
-		if secPast <= 300 {
-			return time.Duration(baseInterval*2) * time.Second
+		return time.Duration(baseInterval*2) * time.Second // 1-3 min: moderate
+	case secInCycle >= 420: // 3 min before next :X0 — approaching next observation
+		remaining := 600 - secInCycle
+		if remaining <= 60 {
+			return time.Duration(baseInterval) * time.Second // densest: last 60s
 		}
+		return time.Duration(baseInterval*2) * time.Second // 7-9 min: moderate
+	default: // 3-7 min past :X0 — low probability window
 		return time.Duration(baseInterval*3) * time.Second
-	case secPast >= 1200: // 10 min before next boundary: approaching next METAR
-		remaining := 1800 - secPast
-		if remaining <= 120 {
-			return time.Duration(baseInterval) * time.Second
-		}
-		if remaining <= 300 {
-			return time.Duration(baseInterval*2) * time.Second
-		}
-		return time.Duration(baseInterval*3) * time.Second
-	default: // middle period: low probability
-		return time.Duration(baseInterval*4) * time.Second
 	}
 }
 
@@ -329,7 +322,7 @@ func printStartupDiagnostics(logger *AsyncLogger, client *http.Client, station s
 	logger.Log("OS/Arch:      %s/%s", runtime.GOOS, runtime.GOARCH)
 	logger.Log("Station:      %s", station)
 	logger.Log("Location:     %s", *flagLocation)
-	logger.Log("Base interval: %ds", *flagInterval)
+	logger.Log("Base interval: %ds (10-min cycle: dense at :X0 ±3min)", *flagInterval)
 	logger.Log("Log dir:      %s", *flagLogDir)
 	logger.Log("PID:          %d", os.Getpid())
 
@@ -696,9 +689,8 @@ func main() {
 		// Heartbeat
 		if pollCount%20 == 0 {
 			nowUTC := time.Now().UTC()
-			minPast := nowUTC.Minute() % 30
-			secPast := minPast*60 + nowUTC.Second()
-			nextBoundary := 1800 - secPast
+			secInCycle := (nowUTC.Minute()%10)*60 + nowUTC.Second()
+			nextBoundary := 600 - secInCycle
 
 			parts := []string{}
 			if v3Rec != nil && v3Rec.Error == "" {
@@ -709,7 +701,7 @@ func main() {
 				obsStr := time.Unix(v1Rec.ObsTimeUTC, 0).UTC().Format("15:04:05")
 				parts = append(parts, fmt.Sprintf("v1: %dobs latest=%s (%.1fms)", v1Rec.V1TotalObs, obsStr, v1Rec.HTTPMs))
 			}
-			logger.Log("[heartbeat #%d] interval=%v | next_boundary=%ds | %s",
+			logger.Log("[heartbeat #%d] interval=%v | next_:X0=%ds | %s",
 				pollCount, interval, nextBoundary, strings.Join(parts, " | "))
 		}
 
