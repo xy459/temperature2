@@ -34,6 +34,7 @@ var (
 	flagLogDir   = flag.String("log-dir", "./logs", "Log output directory")
 	flagInterval = flag.Int("interval", 5, "Base polling interval in seconds (dense window)")
 	flagVerbose  = flag.Bool("verbose", false, "Verbose output mode")
+	flagRateTest = flag.Bool("rate-test", false, "Run rate limit test instead of latency test")
 )
 
 // ── Data Structures ────────────────────────────────────────────────────────────
@@ -526,8 +527,13 @@ func main() {
 
 	os.MkdirAll(*flagLogDir, 0755)
 	ts := time.Now().Format("20060102_150405")
-	logPath := filepath.Join(*flagLogDir, fmt.Sprintf("wu_latency_%s_%s.log", *flagLocation, ts))
-	jsonPath := filepath.Join(*flagLogDir, fmt.Sprintf("wu_latency_%s_%s.json", *flagLocation, ts))
+
+	prefix := "wu_latency"
+	if *flagRateTest {
+		prefix = "wu_ratetest"
+	}
+	logPath := filepath.Join(*flagLogDir, fmt.Sprintf("%s_%s_%s.log", prefix, *flagLocation, ts))
+	jsonPath := filepath.Join(*flagLogDir, fmt.Sprintf("%s_%s_%s.json", prefix, *flagLocation, ts))
 
 	logger, err := NewAsyncLogger(logPath)
 	if err != nil {
@@ -537,6 +543,11 @@ func main() {
 	defer logger.Close()
 
 	client := buildHTTPClient()
+
+	if *flagRateTest {
+		runRateTest(logger, client, *flagStation)
+		return
+	}
 
 	printStartupDiagnostics(logger, client, *flagStation)
 
