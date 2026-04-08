@@ -185,7 +185,7 @@ def enrich_obs_with_metar(obs_rows: list, metar_rows: list) -> list:
     """
     为每条 obs 记录附加两个 METAR 字段：
       curr_metar_temp / curr_metar_time : obs_time 所在 30 分钟窗口内的 METAR
-      next_metar_temp / next_metar_time : 下一个 30 分钟窗口内的 METAR
+      prev_metar_temp / prev_metar_time : 上一个 30 分钟窗口内的 METAR
     若对应窗口暂无数据则 temp=None。
 
     WU V1 返回的 METAR 时间戳不一定恰好落在 :00/:30 整点，
@@ -214,11 +214,10 @@ def enrich_obs_with_metar(obs_rows: list, metar_rows: list) -> list:
         obs_dt = datetime.strptime(row["obs_time"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
 
         curr_start = _window_start(obs_dt)
-        next_start = curr_start + timedelta(minutes=30)
-        next_end   = next_start + timedelta(minutes=30)
+        prev_start = curr_start - timedelta(minutes=30)
 
-        r["curr_metar_temp"], r["curr_metar_time"] = _find_in_window(curr_start, next_start)
-        r["next_metar_temp"], r["next_metar_time"] = _find_in_window(next_start, next_end)
+        r["curr_metar_temp"], r["curr_metar_time"] = _find_in_window(curr_start, curr_start + timedelta(minutes=30))
+        r["prev_metar_temp"], r["prev_metar_time"] = _find_in_window(prev_start, curr_start)
         enriched.append(r)
 
     return enriched
@@ -387,7 +386,7 @@ TEMPLATE = """
         <th id="th-poll">poll_time</th>
         <th>⌊均温⌋</th>
         <th>当前时段 METAR</th>
-        <th>下一时段 METAR</th>
+        <th>上一时段 METAR</th>
       </tr>
     </thead>
     <tbody>
@@ -414,9 +413,9 @@ TEMPLATE = """
           {% endif %}
         </td>
         <td>
-          {% if r.next_metar_temp is not none %}
-            <span class="metar-val">{{ r.next_metar_temp }}°C</span>
-            <span class="metar-time tc" data-utc="{{ r.next_metar_time }}">{{ r.next_metar_time }}</span>
+          {% if r.prev_metar_temp is not none %}
+            <span class="metar-val">{{ r.prev_metar_temp }}°C</span>
+            <span class="metar-time tc" data-utc="{{ r.prev_metar_time }}">{{ r.prev_metar_time }}</span>
           {% else %}
             <span class="metar-val none">—</span>
           {% endif %}
