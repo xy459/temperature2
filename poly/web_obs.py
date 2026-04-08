@@ -79,59 +79,50 @@ TEMPLATE = """
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-         background: #0f172a; color: #e2e8f0; min-height: 100vh; padding: 24px; }
-  h1 { font-size: 1.4rem; font-weight: 600; margin-bottom: 20px; color: #f1f5f9; }
+         background: #f5f5f5; color: #333; padding: 24px; }
+  h1 { font-size: 1.2rem; font-weight: 600; margin-bottom: 16px; color: #111; }
 
-  .card { background: #1e293b; border-radius: 12px; padding: 20px;
-          margin-bottom: 20px; border: 1px solid #334155; }
+  .card { background: #fff; border-radius: 8px; padding: 16px;
+          margin-bottom: 16px; border: 1px solid #ddd; }
 
   .form-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
-  label { font-size: 0.8rem; color: #94a3b8; display: block; margin-bottom: 4px; }
+  label { font-size: 0.8rem; color: #666; display: block; margin-bottom: 4px; }
   select, input[type=date] {
-    background: #0f172a; border: 1px solid #475569; border-radius: 8px;
-    color: #e2e8f0; padding: 8px 12px; font-size: 0.9rem; outline: none;
-    appearance: none;
+    border: 1px solid #ccc; border-radius: 4px;
+    color: #333; padding: 6px 10px; font-size: 0.9rem; background: #fff;
   }
-  select:focus, input[type=date]:focus { border-color: #6366f1; }
   button {
-    background: #6366f1; color: white; border: none; border-radius: 8px;
-    padding: 9px 20px; font-size: 0.9rem; cursor: pointer; transition: background .15s;
+    background: #2563eb; color: #fff; border: none; border-radius: 4px;
+    padding: 7px 18px; font-size: 0.9rem; cursor: pointer;
   }
-  button:hover { background: #4f46e5; }
+  button:hover { background: #1d4ed8; }
 
-  .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-                  gap: 12px; margin-bottom: 20px; }
-  .stat { background: #0f172a; border-radius: 8px; padding: 14px;
-          border: 1px solid #334155; }
-  .stat-label { font-size: 0.72rem; color: #64748b; margin-bottom: 4px; }
-  .stat-value { font-size: 1.6rem; font-weight: 700; color: #f8fafc; }
-  .stat-value.temp { color: #f59e0b; }
-  .stat-value.avg  { color: #34d399; }
+  .city-tz { font-size: 0.78rem; color: #888; margin-top: 8px; }
 
-  .quality { font-size: 0.82rem; padding: 8px 14px; border-radius: 6px;
-             margin-bottom: 16px; background: #1e293b; border: 1px solid #334155; }
-  .quality.ok  { border-color: #34d399; color: #34d399; }
-  .quality.warn { border-color: #f59e0b; color: #f59e0b; }
+  .summary-grid { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  .stat { background: #fff; border: 1px solid #ddd; border-radius: 6px;
+          padding: 12px 16px; min-width: 130px; }
+  .stat-label { font-size: 0.72rem; color: #888; margin-bottom: 2px; }
+  .stat-value { font-size: 1.5rem; font-weight: 700; color: #111; }
+
+  .quality { font-size: 0.82rem; padding: 7px 12px; border-radius: 4px;
+             margin-bottom: 12px; border: 1px solid #ccc; color: #555; background: #fff; }
+  .quality.ok   { border-color: #16a34a; color: #15803d; }
+  .quality.warn { border-color: #d97706; color: #b45309; }
 
   table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-  th { text-align: left; padding: 10px 12px; color: #64748b;
-       font-size: 0.75rem; font-weight: 500;
-       border-bottom: 1px solid #334155; white-space: nowrap; }
-  td { padding: 9px 12px; border-bottom: 1px solid #1e293b;
-       color: #cbd5e1; white-space: nowrap; }
-  tr:first-child td { color: #f1f5f9; font-weight: 600; }
-  tr:first-child td.temp-cell { color: #f59e0b; }
-  tr:nth-child(2) td { color: #e2e8f0; }
-  tr:nth-child(2) td.temp-cell { color: #fbbf24; }
-  tr:hover td { background: #1e293b; }
+  th { text-align: left; padding: 8px 12px; color: #666; font-size: 0.75rem;
+       border-bottom: 2px solid #e5e5e5; white-space: nowrap; }
+  td { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; color: #333; white-space: nowrap; }
+  tr:first-child td { font-weight: 600; }
+  tr:hover td { background: #f9f9f9; }
 
-  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px;
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 4px;
            font-size: 0.7rem; font-weight: 600; }
-  .badge-new  { background: #1d4ed8; color: #93c5fd; }
-  .badge-used { background: #374151; color: #9ca3af; }
+  .badge-new  { background: #dbeafe; color: #1d4ed8; }
+  .badge-used { background: #f3f4f6; color: #6b7280; }
 
-  .empty { color: #475569; text-align: center; padding: 40px; }
-  .city-tz { font-size: 0.78rem; color: #64748b; margin-top: 4px; }
+  .empty { color: #aaa; text-align: center; padding: 32px; }
 </style>
 </head>
 <body>
@@ -173,17 +164,17 @@ TEMPLATE = """
   {% if rows %}
   <div class="stat">
     <div class="stat-label">最新温度</div>
-    <div class="stat-value temp">{{ rows[0].temperature }}°C</div>
+    <div class="stat-value">{{ rows[0].temperature }}°C</div>
   </div>
   {% if rows | length >= 2 %}
   <div class="stat">
-    <div class="stat-label">均温（最新2条, ⌊avg⌋）</div>
-    <div class="stat-value avg">{{ avg_temp }}°C</div>
+    <div class="stat-label">均温（⌊avg⌋）</div>
+    <div class="stat-value">{{ avg_temp }}°C</div>
   </div>
   {% endif %}
   <div class="stat">
-    <div class="stat-label">最新 obs 时间（UTC）</div>
-    <div class="stat-value" style="font-size:1rem; padding-top:6px;">{{ rows[0].obs_time }}</div>
+    <div class="stat-label">最新 obs 时间 (UTC)</div>
+    <div class="stat-value" style="font-size:0.9rem; padding-top:4px;">{{ rows[0].obs_time }}</div>
   </div>
   {% endif %}
 </div>
@@ -212,9 +203,9 @@ TEMPLATE = """
       <tr>
         <td>{{ loop.index }}</td>
         <td>{{ r.obs_time }}</td>
-        <td class="temp-cell">{{ r.temperature }}</td>
+        <td>{{ r.temperature }}</td>
         <td>{{ r.temp_max_since_7am if r.temp_max_since_7am is not none else "—" }}</td>
-        <td style="color:#64748b; font-size:0.8rem;">{{ r.poll_time }}</td>
+        <td style="color:#aaa; font-size:0.8rem;">{{ r.poll_time }}</td>
         <td>
           {% if loop.index <= 2 %}
           <span class="badge badge-new">参与均值</span>
