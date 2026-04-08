@@ -399,14 +399,10 @@ TEMPLATE = """
         <td>{{ r.temp_max_since_7am if r.temp_max_since_7am is not none else "—" }}</td>
         <td class="tc poll-time" style="color:#aaa; font-size:0.8rem;" data-utc="{{ r.poll_time }}">{{ r.poll_time }}</td>
         <td>
-          {% if loop.index <= 2 %}
-            {% if avg_temp is not none %}
-              <span style="font-weight:600; color:#1d4ed8;">{{ avg_temp }}°C</span>
-            {% else %}
-              <span class="badge badge-new">参与均值</span>
-            {% endif %}
+          {% if avg_temp is not none %}
+            <span style="font-weight:600; color:{% if loop.index <= 2 %}#1d4ed8{% else %}#9ca3af{% endif %};">{{ avg_temp }}°C</span>
           {% else %}
-          <span class="badge badge-used">历史</span>
+            <span style="color:#bbb;">—</span>
           {% endif %}
         </td>
         <td>
