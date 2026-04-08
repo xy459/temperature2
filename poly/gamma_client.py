@@ -86,7 +86,7 @@ def parse_market_no_info(market: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 no_price    = float(raw_prices[i]) if i < len(raw_prices) else 0.0
                 no_token_id = raw_token_ids[i] if i < len(raw_token_ids) else ""
 
-        if no_token_id is None:
+        if not no_token_id:
             return None
 
         return {
