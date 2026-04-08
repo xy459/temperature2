@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 _SESSION = requests.Session()
 _SESSION.headers.update({"User-Agent": "PolyTempBot/1.0"})
 
-# 从 question 中提取温度整数，如 "... be 20°C?" → 20
-_TEMP_RE = re.compile(r"(\d+)\s*°[CF]")
+# 从 question 中提取温度整数，如 "... be 20°C?" → 20，"-5°C" → -5
+_TEMP_RE = re.compile(r"(-?\d+)\s*°[CF]")
 
 
 def get_event_markets(event_slug: str) -> List[Dict[str, Any]]:
