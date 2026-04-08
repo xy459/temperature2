@@ -9,6 +9,7 @@
 """
 import logging
 import math
+import re
 import sqlite3
 import threading
 import time
@@ -35,8 +36,12 @@ _CITY_MAP = {c["icao"]: c for c in CITIES}
 _SESSION = requests.Session()
 _SESSION.headers.update({"User-Agent": "PolyTempBot/1.0"})
 
-V1_BASE    = "https://api.weather.com/v1/location/{icao}:9:{country}/observations/historical.json"
+V1_BASE       = "https://api.weather.com/v1/location/{icao}:9:{country}/observations/historical.json"
+NOAA_BASE     = "https://aviationweather.gov/api/data/metar?ids={icao}&format=raw&taf=false"
 POLL_INTERVAL = 5 * 60  # 秒
+
+# 匹配 METAR 温度/露点组，如 18/06、M02/M10、09/M03
+_NOAA_TEMP_RE = re.compile(r'\b(M?\d{1,2})/(M?\d{1,2})\b')
 
 
 # ── V1 API 拉取 ───────────────────────────────────────────────────────
@@ -72,7 +77,7 @@ def _fetch_v1(icao: str, country: str, date_str: str):
 
 
 def fetch_and_store(city: dict, date_str: str) -> tuple:
-    """拉取指定城市指定日期的 METAR 并写库，返回 (新增条数, error_msg)。"""
+    """拉取指定城市指定日期的 WU METAR 并写库，返回 (新增条数, error_msg)。"""
     obs_list, err = _fetch_v1(city["icao"], city["country"], date_str)
     if err:
         return 0, err
@@ -80,10 +85,69 @@ def fetch_and_store(city: dict, date_str: str) -> tuple:
     return inserted, ""
 
 
+# ── NOAA METAR 拉取 ───────────────────────────────────────────────────
+
+def _parse_noaa_temp(raw: str):
+    """从原始 METAR 报文中提取温度（°C），负温以 M 前缀表示。"""
+    m = _NOAA_TEMP_RE.search(raw)
+    if not m:
+        return None
+    val = m.group(1)
+    return -int(val[1:]) if val.startswith("M") else int(val)
+
+
+def _parse_noaa_obs_time(raw: str) -> str | None:
+    """
+    从原始 METAR 报文中提取观测时间，返回 "YYYY-MM-DD HH:MM:00" (UTC)。
+    METAR 时间格式为 DDHHMMZ，如 081250Z → 第8天 12:50 UTC。
+    """
+    m = re.search(r'\b(\d{2})(\d{2})(\d{2})Z\b', raw)
+    if not m:
+        return None
+    day, hour, minute = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    now = datetime.now(timezone.utc)
+    try:
+        dt = now.replace(day=day, hour=hour, minute=minute, second=0, microsecond=0)
+        # 若解析日期比当前大（跨月边界），回退到上个月
+        if dt > now + timedelta(hours=1):
+            if now.month == 1:
+                dt = dt.replace(year=now.year - 1, month=12)
+            else:
+                dt = dt.replace(month=now.month - 1)
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def fetch_and_store_noaa(icao: str) -> tuple:
+    """拉取 NOAA 最新 METAR 并写库，返回 (is_new: bool, error_msg: str)。"""
+    url = NOAA_BASE.format(icao=icao)
+    try:
+        resp = _SESSION.get(url, timeout=10)
+        resp.raise_for_status()
+        body = resp.text
+    except Exception as e:
+        return False, str(e)
+
+    lines = [l.strip() for l in body.strip().splitlines() if l.strip() and icao in l]
+    if not lines:
+        return False, "no METAR line"
+
+    raw      = lines[0]
+    obs_time = _parse_noaa_obs_time(raw)
+    temp     = _parse_noaa_temp(raw)
+
+    if not obs_time:
+        return False, f"cannot parse time: {raw}"
+
+    inserted = db.insert_noaa_metar(icao, obs_time, temp)
+    return inserted, ""
+
+
 # ── 启动全量初始化 ────────────────────────────────────────────────────
 
 def init_metar_all():
-    """程序启动时，为所有城市拉取当天 METAR 并写库。"""
+    """程序启动时，为所有城市拉取当天 WU METAR 并写库。"""
     logger.info("[metar] 启动全量初始化，共 %d 个城市", len(CITIES))
     total_new = 0
     for city in CITIES:
@@ -96,6 +160,19 @@ def init_metar_all():
             logger.info("[metar] %s (%s) %s → +%d 条",
                         city["name"], city["icao"], today, inserted)
     logger.info("[metar] 初始化完成，共新增 %d 条", total_new)
+
+
+def init_noaa_metar_all():
+    """程序启动时，为所有城市拉取最新 NOAA METAR 并写库。"""
+    logger.info("[noaa] 启动初始化，共 %d 个城市", len(CITIES))
+    for city in CITIES:
+        is_new, err = fetch_and_store_noaa(city["icao"])
+        if err:
+            logger.error("[noaa] 初始化失败 %s (%s): %s", city["name"], city["icao"], err)
+        else:
+            logger.info("[noaa] %s (%s) → %s", city["name"], city["icao"],
+                        "新数据" if is_new else "已存在")
+    logger.info("[noaa] 初始化完成")
 
 
 # ── 后台轮询线程 ──────────────────────────────────────────────────────
@@ -129,6 +206,13 @@ def _poll_loop():
                 logger.info("[metar] %s (%s) %s → +%d 条新数据",
                             city["name"], icao, today, inserted)
 
+            # NOAA METAR 轮询
+            is_new, err = fetch_and_store_noaa(icao)
+            if err:
+                logger.debug("[noaa] 轮询失败 %s (%s): %s", city["name"], icao, err)
+            elif is_new:
+                logger.info("[noaa] %s (%s) → 新 METAR", city["name"], icao)
+
             last_date[icao] = today
 
 
@@ -159,7 +243,7 @@ def query_obs(icao: str, date_str: str):
 
 
 def query_metar(icao: str, date_str: str):
-    """从库中读取 METAR，不足时即时补拉一次（仅当该日期完全无数据）。"""
+    """从库中读取 WU METAR，不足时即时补拉一次（仅当该日期完全无数据）。"""
     if not db.has_metar_data(icao, date_str):
         city = _CITY_MAP.get(icao)
         if city:
@@ -167,6 +251,17 @@ def query_metar(icao: str, date_str: str):
             fetch_and_store(city, date_str)
 
     return db.get_metar_observations(icao, date_str)
+
+
+def query_noaa_metar(icao: str, date_str: str):
+    """从库中读取 NOAA METAR；若查询今天且无数据，则即时拉取一次。"""
+    rows = db.get_noaa_metar_observations(icao, date_str)
+    if not rows:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if date_str == today:
+            fetch_and_store_noaa(icao)
+            rows = db.get_noaa_metar_observations(icao, date_str)
+    return rows
 
 
 # ── METAR 与 obs 关联 ─────────────────────────────────────────────────
@@ -181,32 +276,34 @@ def _window_start(obs_dt: datetime) -> datetime:
     )
 
 
-def enrich_obs_with_metar(obs_rows: list, metar_rows: list) -> list:
-    """
-    为每条 obs 记录附加两个 METAR 字段：
-      curr_metar_temp / curr_metar_time : obs_time 所在 30 分钟窗口内的 METAR
-      prev_metar_temp / prev_metar_time : 上一个 30 分钟窗口内的 METAR
-    若对应窗口暂无数据则 temp=None。
-
-    WU V1 返回的 METAR 时间戳不一定恰好落在 :00/:30 整点，
-    因此采用区间查找 [window_start, window_start+30min) 而非精确匹配。
-    """
-    # 将 METAR 记录解析为 (datetime, temperature) 列表并按时间排序
-    metar_list: list[tuple[datetime, object]] = []
-    for m in metar_rows:
+def _build_metar_list(rows: list) -> list:
+    """将 DB METAR 记录转为 sorted [(datetime, temperature)] 列表。"""
+    result = []
+    for m in rows:
         try:
             dt = datetime.strptime(m["obs_time"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-            metar_list.append((dt, m["temperature"]))
+            result.append((dt, m["temperature"]))
         except Exception:
             continue
-    metar_list.sort()
+    result.sort()
+    return result
 
-    def _find_in_window(start: datetime, end: datetime):
-        """返回落在 [start, end) 窗口内的第一条 (temperature, utc_iso_str)，无则 (None, None)。"""
-        for dt, temp in metar_list:
-            if start <= dt < end:
-                return temp, dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-        return None, None
+
+def _find_in_window(metar_list: list, start: datetime, end: datetime):
+    """返回落在 [start, end) 窗口内的第一条 (temperature, utc_iso_str)，无则 (None, None)。"""
+    for dt, temp in metar_list:
+        if start <= dt < end:
+            return temp, dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return None, None
+
+
+def enrich_obs_with_metar(obs_rows: list, metar_rows: list, noaa_rows: list) -> list:
+    """
+    为每条 obs 记录附加 WU METAR（当前/上一时段）和 NOAA METAR（当前时段）字段。
+    时间戳采用区间查找 [window_start, window_start+30min)，兼容非整点报文。
+    """
+    wu_list   = _build_metar_list(metar_rows)
+    noaa_list = _build_metar_list(noaa_rows)
 
     enriched = []
     for row in obs_rows:
@@ -215,9 +312,11 @@ def enrich_obs_with_metar(obs_rows: list, metar_rows: list) -> list:
 
         curr_start = _window_start(obs_dt)
         prev_start = curr_start - timedelta(minutes=30)
+        curr_end   = curr_start + timedelta(minutes=30)
 
-        r["curr_metar_temp"], r["curr_metar_time"] = _find_in_window(curr_start, curr_start + timedelta(minutes=30))
-        r["prev_metar_temp"], r["prev_metar_time"] = _find_in_window(prev_start, curr_start)
+        r["curr_metar_temp"], r["curr_metar_time"] = _find_in_window(wu_list,   curr_start, curr_end)
+        r["prev_metar_temp"], r["prev_metar_time"] = _find_in_window(wu_list,   prev_start, curr_start)
+        r["noaa_metar_temp"], r["noaa_metar_time"] = _find_in_window(noaa_list, curr_start, curr_end)
         enriched.append(r)
 
     return enriched
@@ -387,6 +486,7 @@ TEMPLATE = """
         <th>⌊均温⌋</th>
         <th>当前时段 METAR</th>
         <th>上一时段 METAR</th>
+        <th>NOAA METAR</th>
       </tr>
     </thead>
     <tbody>
@@ -416,6 +516,14 @@ TEMPLATE = """
           {% if r.prev_metar_temp is not none %}
             <span class="metar-val">{{ r.prev_metar_temp }}°C</span>
             <span class="metar-time tc" data-utc="{{ r.prev_metar_time }}">{{ r.prev_metar_time }}</span>
+          {% else %}
+            <span class="metar-val none">—</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if r.noaa_metar_temp is not none %}
+            <span class="metar-val">{{ r.noaa_metar_temp }}°C</span>
+            <span class="metar-time tc" data-utc="{{ r.noaa_metar_time }}">{{ r.noaa_metar_time }}</span>
           {% else %}
             <span class="metar-val none">—</span>
           {% endif %}
@@ -503,8 +611,9 @@ def index():
 
     obs_rows          = query_obs(icao, date_str)
     avg_temp, quality = calc_avg(obs_rows)
-    metar_rows        = query_metar(icao, date_str)        # 无数据时自动补拉
-    rows              = enrich_obs_with_metar(obs_rows, metar_rows)  # 附加 METAR 列
+    metar_rows        = query_metar(icao, date_str)
+    noaa_rows         = query_noaa_metar(icao, date_str)
+    rows              = enrich_obs_with_metar(obs_rows, metar_rows, noaa_rows)
 
     # 为每行附加各自的滚动均温：该行与紧邻下一行（时间上更早）的 floor 均值
     for i, r in enumerate(rows):
@@ -536,6 +645,7 @@ if __name__ == "__main__":
 
     # 启动全量初始化（同步，确保首次访问前数据就绪）
     init_metar_all()
+    init_noaa_metar_all()
 
     # 启动后台轮询线程
     start_poll_thread()

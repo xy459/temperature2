@@ -83,6 +83,21 @@ def init_db():
     """)
 
     c.execute("""
+        CREATE TABLE IF NOT EXISTS noaa_metar_observations (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            city_icao    TEXT     NOT NULL,
+            obs_time     DATETIME NOT NULL,
+            temperature  REAL,
+            fetched_at   DATETIME NOT NULL,
+            UNIQUE(city_icao, obs_time)
+        )
+    """)
+    c.execute("""
+        CREATE INDEX IF NOT EXISTS idx_noaa_metar_city_time
+        ON noaa_metar_observations(city_icao, obs_time DESC)
+    """)
+
+    c.execute("""
         CREATE TABLE IF NOT EXISTS settings (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -307,3 +322,43 @@ def has_metar_data(city_icao: str, date_str: str) -> bool:
     row = c.fetchone()
     conn.close()
     return row is not None
+
+
+# ── noaa_metar_observations ───────────────────────────────────────────
+
+def insert_noaa_metar(city_icao: str, obs_time: str, temperature) -> bool:
+    """插入一条 NOAA METAR 记录，已存在则跳过。返回是否为新数据。"""
+    fetched_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO noaa_metar_observations
+              (city_icao, obs_time, temperature, fetched_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (city_icao, obs_time, temperature, fetched_at),
+        )
+        conn.commit()
+        return conn.total_changes > 0
+    finally:
+        conn.close()
+
+
+def get_noaa_metar_observations(city_icao: str, date_str: str) -> List[Dict[str, Any]]:
+    """返回指定城市指定日期的 NOAA METAR 记录，按 obs_time 降序。"""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT obs_time, temperature
+        FROM noaa_metar_observations
+        WHERE city_icao = ?
+          AND date(obs_time) = ?
+        ORDER BY obs_time DESC
+        """,
+        (city_icao, date_str),
+    )
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
