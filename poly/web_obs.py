@@ -12,7 +12,7 @@ import math
 import sqlite3
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import requests
 from flask import Flask, render_template_string, request
@@ -169,50 +169,46 @@ def query_metar(icao: str, date_str: str):
     return db.get_metar_observations(icao, date_str)
 
 
-# ── METAR 时段解析 ────────────────────────────────────────────────────
+# ── METAR 与 obs 关联 ─────────────────────────────────────────────────
 
-def parse_metar_periods(metar_rows: list):
-    """
-    从数据库返回的 METAR 列表（降序）中确定当前时段和前一时段。
-
-    当前 30 分钟窗口起始 = floor(now_utc / 30min) * 30min。
-    - 最新记录 >= 当前窗口起始 → 当前时段已到
-    - 否则 → 当前时段未到，显示 "—"
-    """
-    if not metar_rows:
-        return None, None
-
-    now     = datetime.now(timezone.utc)
-    minutes = (now.hour * 60 + now.minute) // 30 * 30
-    window_start = now.replace(
-        hour=minutes // 60, minute=minutes % 60, second=0, microsecond=0
+def _window_start(obs_dt: datetime) -> datetime:
+    """返回 obs_dt 所在 30 分钟窗口的起始时间（精确到分，秒归零）。"""
+    total_min    = obs_dt.hour * 60 + obs_dt.minute
+    window_min   = (total_min // 30) * 30
+    return obs_dt.replace(
+        hour=window_min // 60, minute=window_min % 60,
+        second=0, microsecond=0,
     )
 
-    latest    = metar_rows[0]   # 降序，最新在前
-    latest_dt = datetime.strptime(
-        latest["obs_time"], "%Y-%m-%d %H:%M:%S"
-    ).replace(tzinfo=timezone.utc)
 
-    def _fmt(row):
-        return {
-            "temp":     row["temperature"],
-            "time_str": datetime.strptime(
-                row["obs_time"], "%Y-%m-%d %H:%M:%S"
-            ).strftime("%H:%M UTC"),
-        }
+def enrich_obs_with_metar(obs_rows: list, metar_rows: list) -> list:
+    """
+    为每条 obs 记录附加两个 METAR 字段：
+      curr_metar_temp / curr_metar_time : obs_time 所在 30 分钟窗口的 METAR
+      next_metar_temp / next_metar_time : 下一个 30 分钟窗口的 METAR
+    若对应窗口暂无数据则 temp=None。
+    """
+    # "YYYY-MM-DD HH:MM:SS" → temperature 快查字典
+    metar_map = {m["obs_time"]: m["temperature"] for m in metar_rows}
 
-    if latest_dt >= window_start:
-        curr = {**_fmt(latest), "arrived": True}
-        prev = _fmt(metar_rows[1]) if len(metar_rows) >= 2 else None
-    else:
-        curr = {
-            "temp": None,
-            "time_str": window_start.strftime("%H:%M UTC"),
-            "arrived": False,
-        }
-        prev = _fmt(latest)
+    enriched = []
+    for row in obs_rows:
+        r      = dict(row)
+        obs_dt = datetime.strptime(row["obs_time"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
 
-    return curr, prev
+        curr_start = _window_start(obs_dt)
+        next_start = curr_start + timedelta(minutes=30)
+
+        curr_key = curr_start.strftime("%Y-%m-%d %H:%M:%S")
+        next_key = next_start.strftime("%Y-%m-%d %H:%M:%S")
+
+        r["curr_metar_temp"] = metar_map.get(curr_key)
+        r["curr_metar_time"] = curr_start.strftime("%H:%M")
+        r["next_metar_temp"] = metar_map.get(next_key)
+        r["next_metar_time"] = next_start.strftime("%H:%M")
+        enriched.append(r)
+
+    return enriched
 
 
 # ── 均温质量校验 ──────────────────────────────────────────────────────
@@ -252,8 +248,6 @@ TEMPLATE = """
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
          background: #f5f5f5; color: #333; padding: 24px; }
   h1 { font-size: 1.2rem; font-weight: 600; margin-bottom: 16px; color: #111; }
-  h2 { font-size: 0.85rem; font-weight: 600; color: #555; margin-bottom: 10px;
-       text-transform: uppercase; letter-spacing: .04em; }
 
   .card { background: #fff; border-radius: 8px; padding: 16px;
           margin-bottom: 16px; border: 1px solid #ddd; }
@@ -273,11 +267,6 @@ TEMPLATE = """
   .stat-label { font-size: 0.7rem; color: #888; margin-bottom: 2px; }
   .stat-value { font-size: 1.4rem; font-weight: 700; color: #111; }
   .stat-sub   { font-size: 0.72rem; color: #aaa; margin-top: 2px; }
-  .stat.metar-ok   { border-color: #2563eb; }
-  .stat.metar-wait { border-color: #d1d5db; }
-  .stat.metar-ok   .stat-value { color: #2563eb; }
-  .stat.metar-wait .stat-value { color: #9ca3af; }
-  .divider { width: 1px; background: #e5e7eb; margin: 0 4px; align-self: stretch; }
 
   .quality { font-size: 0.82rem; padding: 7px 12px; border-radius: 4px;
              margin-bottom: 12px; border: 1px solid #ccc; color: #555; background: #fff; }
@@ -293,10 +282,12 @@ TEMPLATE = """
 
   .badge { display: inline-block; padding: 1px 8px; border-radius: 4px;
            font-size: 0.7rem; font-weight: 600; }
-  .badge-new    { background: #dbeafe; color: #1d4ed8; }
-  .badge-used   { background: #f3f4f6; color: #6b7280; }
-  .badge-curr   { background: #dbeafe; color: #1d4ed8; }
-  .badge-prev   { background: #fef3c7; color: #92400e; }
+  .badge-new  { background: #dbeafe; color: #1d4ed8; }
+  .badge-used { background: #f3f4f6; color: #6b7280; }
+
+  .metar-val      { color: #111; }
+  .metar-val.none { color: #bbb; }
+  .metar-time     { font-size: 0.75rem; color: #aaa; display: block; }
 
   .empty { color: #aaa; text-align: center; padding: 32px; }
 </style>
@@ -331,7 +322,7 @@ TEMPLATE = """
 
 {% if city %}
 
-{# ── 统计卡片 ── #}
+{# ── 统计卡片（仅 obs 相关）── #}
 <div class="stats-row">
   <div class="stat">
     <div class="stat-label">obs 记录条数</div>
@@ -350,34 +341,6 @@ TEMPLATE = """
   </div>
   {% endif %}
   {% endif %}
-
-  <div class="divider"></div>
-
-  {# METAR 卡片 #}
-  {% if prev_period %}
-  <div class="stat">
-    <div class="stat-label">METAR 前一时段</div>
-    <div class="stat-value">{{ prev_period.temp if prev_period.temp is not none else "—" }}{% if prev_period.temp is not none %}°C{% endif %}</div>
-    <div class="stat-sub">{{ prev_period.time_str }}</div>
-  </div>
-  {% endif %}
-  {% if curr_period %}
-  <div class="stat {% if curr_period.arrived %}metar-ok{% else %}metar-wait{% endif %}">
-    <div class="stat-label">METAR 当前时段</div>
-    <div class="stat-value">
-      {% if curr_period.arrived %}{{ curr_period.temp }}°C{% else %}—{% endif %}
-    </div>
-    <div class="stat-sub">
-      {{ curr_period.time_str }}{% if not curr_period.arrived %}（未到）{% endif %}
-    </div>
-  </div>
-  {% endif %}
-  {% if not prev_period and not curr_period %}
-  <div class="stat">
-    <div class="stat-label">METAR</div>
-    <div class="stat-value" style="font-size:0.9rem; color:#aaa;">暂无数据</div>
-  </div>
-  {% endif %}
 </div>
 
 {% if rows | length >= 2 %}
@@ -386,7 +349,7 @@ TEMPLATE = """
 </div>
 {% endif %}
 
-{# ── WU obs 表格 ── #}
+{# ── obs 表格（含 METAR 两列）── #}
 <div class="card">
   {% if rows %}
   <table>
@@ -398,6 +361,8 @@ TEMPLATE = """
         <th>当日最高 (°C)</th>
         <th>poll_time (UTC)</th>
         <th>均值参与</th>
+        <th>当前时段 METAR</th>
+        <th>下一时段 METAR</th>
       </tr>
     </thead>
     <tbody>
@@ -415,48 +380,28 @@ TEMPLATE = """
           <span class="badge badge-used">历史</span>
           {% endif %}
         </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <div class="empty">该城市该日期暂无 obs 数据</div>
-  {% endif %}
-</div>
-
-{# ── METAR 历史表格 ── #}
-<div class="card">
-  <h2>METAR 当日历史（{{ metar_rows | length }} 条）</h2>
-  {% if metar_rows %}
-  <table>
-    <thead>
-      <tr>
-        <th>#</th>
-        <th>obs_time (UTC)</th>
-        <th>温度 (°C)</th>
-        <th>时段</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for m in metar_rows %}
-      <tr>
-        <td>{{ loop.index }}</td>
-        <td>{{ m.obs_time }}</td>
-        <td>{{ m.temperature if m.temperature is not none else "—" }}</td>
         <td>
-          {% if loop.index == 1 and curr_period and curr_period.arrived %}
-            <span class="badge badge-curr">当前时段</span>
-          {% elif (loop.index == 2 and curr_period and curr_period.arrived) or
-                  (loop.index == 1 and curr_period and not curr_period.arrived) %}
-            <span class="badge badge-prev">前一时段</span>
+          {% if r.curr_metar_temp is not none %}
+            <span class="metar-val">{{ r.curr_metar_temp }}°C</span>
+          {% else %}
+            <span class="metar-val none">—</span>
           {% endif %}
+          <span class="metar-time">{{ r.curr_metar_time }} UTC</span>
+        </td>
+        <td>
+          {% if r.next_metar_temp is not none %}
+            <span class="metar-val">{{ r.next_metar_temp }}°C</span>
+          {% else %}
+            <span class="metar-val none">—</span>
+          {% endif %}
+          <span class="metar-time">{{ r.next_metar_time }} UTC</span>
         </td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
   {% else %}
-  <div class="empty">暂无 METAR 数据</div>
+  <div class="empty">该城市该日期暂无 obs 数据</div>
   {% endif %}
 </div>
 
@@ -479,10 +424,10 @@ def index():
     local_today = datetime.now(ZoneInfo(city["timezone"])).strftime("%Y-%m-%d")
     date_str    = request.args.get("date", local_today)
 
-    rows              = query_obs(icao, date_str)
-    avg_temp, quality = calc_avg(rows)
-    metar_rows        = query_metar(icao, date_str)   # 无数据时自动补拉
-    curr_period, prev_period = parse_metar_periods(metar_rows)
+    obs_rows          = query_obs(icao, date_str)
+    avg_temp, quality = calc_avg(obs_rows)
+    metar_rows        = query_metar(icao, date_str)        # 无数据时自动补拉
+    rows              = enrich_obs_with_metar(obs_rows, metar_rows)  # 附加 METAR 列
 
     return render_template_string(
         TEMPLATE,
@@ -494,9 +439,6 @@ def index():
         rows           = rows,
         avg_temp       = avg_temp,
         quality_status = quality,
-        metar_rows     = metar_rows,
-        curr_period    = curr_period,
-        prev_period    = prev_period,
     )
 
 
