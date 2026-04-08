@@ -398,8 +398,8 @@ TEMPLATE = """
         <td>{{ r.temp_max_since_7am if r.temp_max_since_7am is not none else "—" }}</td>
         <td class="tc poll-time" style="color:#aaa; font-size:0.8rem;" data-utc="{{ r.poll_time }}">{{ r.poll_time }}</td>
         <td>
-          {% if avg_temp is not none %}
-            <span style="font-weight:600; color:{% if loop.index <= 2 %}#1d4ed8{% else %}#9ca3af{% endif %};">{{ avg_temp }}°C</span>
+          {% if r.row_avg is not none %}
+            <span style="font-weight:600; color:{% if loop.index <= 2 %}#1d4ed8{% else %}#9ca3af{% endif %};">{{ r.row_avg }}°C</span>
           {% else %}
             <span style="color:#bbb;">—</span>
           {% endif %}
@@ -505,6 +505,15 @@ def index():
     avg_temp, quality = calc_avg(obs_rows)
     metar_rows        = query_metar(icao, date_str)        # 无数据时自动补拉
     rows              = enrich_obs_with_metar(obs_rows, metar_rows)  # 附加 METAR 列
+
+    # 为每行附加各自的滚动均温：该行与紧邻下一行（时间上更早）的 floor 均值
+    for i, r in enumerate(rows):
+        if i + 1 < len(rows):
+            t1 = r["temperature"]
+            t2 = rows[i + 1]["temperature"]
+            r["row_avg"] = math.floor((t1 + t2) / 2) if (t1 is not None and t2 is not None) else None
+        else:
+            r["row_avg"] = None  # 最后一行无下一行
 
     return render_template_string(
         TEMPLATE,
