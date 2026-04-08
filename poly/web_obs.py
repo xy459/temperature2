@@ -385,7 +385,7 @@ TEMPLATE = """
         <th>温度 (°C)</th>
         <th>当日最高 (°C)</th>
         <th id="th-poll">poll_time</th>
-        <th>均值参与</th>
+        <th>⌊均温⌋</th>
         <th>当前时段 METAR</th>
         <th>下一时段 METAR</th>
       </tr>
@@ -400,7 +400,11 @@ TEMPLATE = """
         <td class="tc poll-time" style="color:#aaa; font-size:0.8rem;" data-utc="{{ r.poll_time }}">{{ r.poll_time }}</td>
         <td>
           {% if loop.index <= 2 %}
-          <span class="badge badge-new">参与均值</span>
+            {% if avg_temp is not none %}
+              <span style="font-weight:600; color:#1d4ed8;">{{ avg_temp }}°C</span>
+            {% else %}
+              <span class="badge badge-new">参与均值</span>
+            {% endif %}
           {% else %}
           <span class="badge badge-used">历史</span>
           {% endif %}
