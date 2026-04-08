@@ -184,12 +184,29 @@ def _window_start(obs_dt: datetime) -> datetime:
 def enrich_obs_with_metar(obs_rows: list, metar_rows: list) -> list:
     """
     为每条 obs 记录附加两个 METAR 字段：
-      curr_metar_temp / curr_metar_time : obs_time 所在 30 分钟窗口的 METAR
-      next_metar_temp / next_metar_time : 下一个 30 分钟窗口的 METAR
+      curr_metar_temp / curr_metar_time : obs_time 所在 30 分钟窗口内的 METAR
+      next_metar_temp / next_metar_time : 下一个 30 分钟窗口内的 METAR
     若对应窗口暂无数据则 temp=None。
+
+    WU V1 返回的 METAR 时间戳不一定恰好落在 :00/:30 整点，
+    因此采用区间查找 [window_start, window_start+30min) 而非精确匹配。
     """
-    # "YYYY-MM-DD HH:MM:SS" → temperature 快查字典
-    metar_map = {m["obs_time"]: m["temperature"] for m in metar_rows}
+    # 将 METAR 记录解析为 (datetime, temperature) 列表并按时间排序
+    metar_list: list[tuple[datetime, object]] = []
+    for m in metar_rows:
+        try:
+            dt = datetime.strptime(m["obs_time"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            metar_list.append((dt, m["temperature"]))
+        except Exception:
+            continue
+    metar_list.sort()
+
+    def _find_in_window(start: datetime, end: datetime):
+        """返回落在 [start, end) 窗口内的第一条 METAR 温度，无则返回 None。"""
+        for dt, temp in metar_list:
+            if start <= dt < end:
+                return temp
+        return None
 
     enriched = []
     for row in obs_rows:
@@ -198,13 +215,11 @@ def enrich_obs_with_metar(obs_rows: list, metar_rows: list) -> list:
 
         curr_start = _window_start(obs_dt)
         next_start = curr_start + timedelta(minutes=30)
+        next_end   = next_start + timedelta(minutes=30)
 
-        curr_key = curr_start.strftime("%Y-%m-%d %H:%M:%S")
-        next_key = next_start.strftime("%Y-%m-%d %H:%M:%S")
-
-        r["curr_metar_temp"] = metar_map.get(curr_key)
+        r["curr_metar_temp"] = _find_in_window(curr_start, next_start)
         r["curr_metar_time"] = curr_start.strftime("%H:%M")
-        r["next_metar_temp"] = metar_map.get(next_key)
+        r["next_metar_temp"] = _find_in_window(next_start, next_end)
         r["next_metar_time"] = next_start.strftime("%H:%M")
         enriched.append(r)
 
