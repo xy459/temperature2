@@ -68,6 +68,21 @@ def init_db():
     """)
 
     c.execute("""
+        CREATE TABLE IF NOT EXISTS metar_observations (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            city_icao    TEXT     NOT NULL,
+            obs_time     DATETIME NOT NULL,
+            temperature  REAL,
+            fetched_at   DATETIME NOT NULL,
+            UNIQUE(city_icao, obs_time)
+        )
+    """)
+    c.execute("""
+        CREATE INDEX IF NOT EXISTS idx_metar_city_time
+        ON metar_observations(city_icao, obs_time DESC)
+    """)
+
+    c.execute("""
         CREATE TABLE IF NOT EXISTS settings (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -230,3 +245,65 @@ def set_setting(key: str, value: str):
     )
     conn.commit()
     conn.close()
+
+
+# ── metar_observations ───────────────────────────────────────────────
+
+def insert_metar_observations(city_icao: str, obs_list: list) -> int:
+    """
+    批量写入 METAR 观测记录，已存在的自动跳过（INSERT OR IGNORE）。
+    obs_list 每项：{"obs_time": "YYYY-MM-DD HH:MM:SS", "temperature": float|None}
+    返回实际新写入的条数。
+    """
+    if not obs_list:
+        return 0
+    fetched_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_conn()
+    before = conn.total_changes
+    conn.executemany(
+        """
+        INSERT OR IGNORE INTO metar_observations
+          (city_icao, obs_time, temperature, fetched_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        [
+            (city_icao, o["obs_time"], o.get("temperature"), fetched_at)
+            for o in obs_list
+        ],
+    )
+    conn.commit()
+    inserted = conn.total_changes - before
+    conn.close()
+    return inserted
+
+
+def get_metar_observations(city_icao: str, date_str: str) -> List[Dict[str, Any]]:
+    """返回指定城市指定日期的 METAR 记录，按 obs_time 降序。"""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT obs_time, temperature
+        FROM metar_observations
+        WHERE city_icao = ?
+          AND date(obs_time) = ?
+        ORDER BY obs_time DESC
+        """,
+        (city_icao, date_str),
+    )
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+
+def has_metar_data(city_icao: str, date_str: str) -> bool:
+    """检查指定城市指定日期是否已有 METAR 数据。"""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT 1 FROM metar_observations WHERE city_icao=? AND date(obs_time)=? LIMIT 1",
+        (city_icao, date_str),
+    )
+    row = c.fetchone()
+    conn.close()
+    return row is not None
