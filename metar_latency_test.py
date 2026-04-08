@@ -198,7 +198,7 @@ class AEMETChannel(METARChannel):
         'LEZL': '5783',
     }
 
-    def __init__(self, station, api_key=“eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4eTk4MzEzOEBnbWFpbC5jb20iLCJqdGkiOiI2Y2NjYTc5ZC0xNWFlLTQ3ZTUtOWMyMi01NTVmYjhjMThjMDAiLCJpc3MiOiJBRU1FVCIsImlhdCI6MTc3NTY0ODQ0OCwidXNlcklkIjoiNmNjY2E3OWQtMTVhZS00N2U1LTljMjItNTU1ZmI4YzE4YzAwIiwicm9sZSI6IiJ9.LEVILkzmaAZpbclW5S2C2mjS7PD12CsQWthseZPTdqk”):
+    def __init__(self, station, api_key="eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4eTk4MzEzOEBnbWFpbC5jb20iLCJqdGkiOiI2Y2NjYTc5ZC0xNWFlLTQ3ZTUtOWMyMi01NTVmYjhjMThjMDAiLCJpc3MiOiJBRU1FVCIsImlhdCI6MTc3NTY0ODQ0OCwidXNlcklkIjoiNmNjY2E3OWQtMTVhZS00N2U1LTljMjItNTU1ZmI4YzE4YzAwIiwicm9sZSI6IiJ9.LEVILkzmaAZpbclW5S2C2mjS7PD12CsQWthseZPTdqk"):
         super().__init__(station)
         self.api_key = api_key
         self.aemet_id = self.STATION_MAP.get(station)
