@@ -229,11 +229,15 @@ class AEMETChannel(METARChannel):
             latest = records[-1]
             fint = latest.get('fint', '')
             ta = latest.get('ta')
-            dt = datetime.datetime.fromisoformat(fint.replace('T', ' ').rstrip('Z'))
-            obs_str = dt.strftime('%d%H%MZ')
+            # Handle "+0000" → "+00:00" for fromisoformat compatibility
+            fint_clean = re.sub(r'\+(\d{2})(\d{2})$', r'+\1:\2', fint)
+            dt = datetime.datetime.fromisoformat(fint_clean)
+            dt_naive = dt.replace(tzinfo=None)
+            obs_str = dt_naive.strftime('%d%H%MZ')
             raw = f"AEMET {self.aemet_id} {obs_str} ta={ta}°C"
             return obs_str, raw, ms
-        except Exception:
+        except Exception as e:
+            print(f"  [AEMET debug] {e}")
             return None
 
 
