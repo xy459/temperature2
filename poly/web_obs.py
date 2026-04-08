@@ -202,11 +202,11 @@ def enrich_obs_with_metar(obs_rows: list, metar_rows: list) -> list:
     metar_list.sort()
 
     def _find_in_window(start: datetime, end: datetime):
-        """返回落在 [start, end) 窗口内的第一条 METAR 温度，无则返回 None。"""
+        """返回落在 [start, end) 窗口内的第一条 (temperature, actual_time_str)，无则 (None, None)。"""
         for dt, temp in metar_list:
             if start <= dt < end:
-                return temp
-        return None
+                return temp, dt.strftime("%H:%M")
+        return None, None
 
     enriched = []
     for row in obs_rows:
@@ -217,10 +217,8 @@ def enrich_obs_with_metar(obs_rows: list, metar_rows: list) -> list:
         next_start = curr_start + timedelta(minutes=30)
         next_end   = next_start + timedelta(minutes=30)
 
-        r["curr_metar_temp"] = _find_in_window(curr_start, next_start)
-        r["curr_metar_time"] = curr_start.strftime("%H:%M")
-        r["next_metar_temp"] = _find_in_window(next_start, next_end)
-        r["next_metar_time"] = next_start.strftime("%H:%M")
+        r["curr_metar_temp"], r["curr_metar_time"] = _find_in_window(curr_start, next_start)
+        r["next_metar_temp"], r["next_metar_time"] = _find_in_window(next_start, next_end)
         enriched.append(r)
 
     return enriched
@@ -398,18 +396,18 @@ TEMPLATE = """
         <td>
           {% if r.curr_metar_temp is not none %}
             <span class="metar-val">{{ r.curr_metar_temp }}°C</span>
+            <span class="metar-time">{{ r.curr_metar_time }} UTC</span>
           {% else %}
             <span class="metar-val none">—</span>
           {% endif %}
-          <span class="metar-time">{{ r.curr_metar_time }} UTC</span>
         </td>
         <td>
           {% if r.next_metar_temp is not none %}
             <span class="metar-val">{{ r.next_metar_temp }}°C</span>
+            <span class="metar-time">{{ r.next_metar_time }} UTC</span>
           {% else %}
             <span class="metar-val none">—</span>
           {% endif %}
-          <span class="metar-time">{{ r.next_metar_time }} UTC</span>
         </td>
       </tr>
       {% endfor %}
