@@ -202,10 +202,10 @@ def enrich_obs_with_metar(obs_rows: list, metar_rows: list) -> list:
     metar_list.sort()
 
     def _find_in_window(start: datetime, end: datetime):
-        """返回落在 [start, end) 窗口内的第一条 (temperature, actual_time_str)，无则 (None, None)。"""
+        """返回落在 [start, end) 窗口内的第一条 (temperature, utc_iso_str)，无则 (None, None)。"""
         for dt, temp in metar_list:
             if start <= dt < end:
-                return temp, dt.strftime("%H:%M")
+                return temp, dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         return None, None
 
     enriched = []
@@ -281,10 +281,18 @@ TEMPLATE = """
   .stat-value { font-size: 1.4rem; font-weight: 700; color: #111; }
   .stat-sub   { font-size: 0.72rem; color: #aaa; margin-top: 2px; }
 
-  .quality { font-size: 0.82rem; padding: 7px 12px; border-radius: 4px;
-             margin-bottom: 12px; border: 1px solid #ccc; color: #555; background: #fff; }
-  .quality.ok   { border-color: #16a34a; color: #15803d; }
-  .quality.warn { border-color: #d97706; color: #b45309; }
+  /* 质量状态：无方框，纯文字 */
+  .quality      { font-size: 0.82rem; margin-bottom: 12px; }
+  .quality.ok   { color: #15803d; }
+  .quality.warn { color: #b45309; }
+
+  /* 表格 */
+  .table-header { display: flex; justify-content: space-between; align-items: center;
+                  margin-bottom: 8px; }
+  .tz-toggle { font-size: 0.78rem; color: #2563eb; cursor: pointer;
+               user-select: none; border: 1px solid #2563eb; border-radius: 4px;
+               padding: 3px 10px; }
+  .tz-toggle:hover { background: #eff6ff; }
 
   table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
   th { text-align: left; padding: 8px 12px; color: #666; font-size: 0.75rem;
@@ -345,7 +353,7 @@ TEMPLATE = """
   <div class="stat">
     <div class="stat-label">最新 WU 温度</div>
     <div class="stat-value">{{ rows[0].temperature }}°C</div>
-    <div class="stat-sub">{{ rows[0].obs_time }}</div>
+    <div class="stat-sub" id="latest-obs-time" data-utc="{{ rows[0].obs_time }}">{{ rows[0].obs_time }}</div>
   </div>
   {% if rows | length >= 2 %}
   <div class="stat">
@@ -365,14 +373,18 @@ TEMPLATE = """
 {# ── obs 表格（含 METAR 两列）── #}
 <div class="card">
   {% if rows %}
+  <div class="table-header">
+    <span id="tz-label" style="font-size:0.8rem; color:#666;">时间：本地时间（{{ city_tz }}）</span>
+    <span class="tz-toggle" id="tz-btn" onclick="toggleTz()">切换 UTC</span>
+  </div>
   <table>
     <thead>
       <tr>
         <th>#</th>
-        <th>obs_time (UTC)</th>
+        <th id="th-obs">obs_time</th>
         <th>温度 (°C)</th>
         <th>当日最高 (°C)</th>
-        <th>poll_time (UTC)</th>
+        <th id="th-poll">poll_time</th>
         <th>均值参与</th>
         <th>当前时段 METAR</th>
         <th>下一时段 METAR</th>
@@ -382,10 +394,10 @@ TEMPLATE = """
       {% for r in rows %}
       <tr>
         <td>{{ loop.index }}</td>
-        <td>{{ r.obs_time }}</td>
+        <td class="tc obs-time" data-utc="{{ r.obs_time }}">{{ r.obs_time }}</td>
         <td>{{ r.temperature }}</td>
         <td>{{ r.temp_max_since_7am if r.temp_max_since_7am is not none else "—" }}</td>
-        <td style="color:#aaa; font-size:0.8rem;">{{ r.poll_time }}</td>
+        <td class="tc poll-time" style="color:#aaa; font-size:0.8rem;" data-utc="{{ r.poll_time }}">{{ r.poll_time }}</td>
         <td>
           {% if loop.index <= 2 %}
           <span class="badge badge-new">参与均值</span>
@@ -396,7 +408,7 @@ TEMPLATE = """
         <td>
           {% if r.curr_metar_temp is not none %}
             <span class="metar-val">{{ r.curr_metar_temp }}°C</span>
-            <span class="metar-time">{{ r.curr_metar_time }} UTC</span>
+            <span class="metar-time tc" data-utc="{{ r.curr_metar_time }}">{{ r.curr_metar_time }}</span>
           {% else %}
             <span class="metar-val none">—</span>
           {% endif %}
@@ -404,7 +416,7 @@ TEMPLATE = """
         <td>
           {% if r.next_metar_temp is not none %}
             <span class="metar-val">{{ r.next_metar_temp }}°C</span>
-            <span class="metar-time">{{ r.next_metar_time }} UTC</span>
+            <span class="metar-time tc" data-utc="{{ r.next_metar_time }}">{{ r.next_metar_time }}</span>
           {% else %}
             <span class="metar-val none">—</span>
           {% endif %}
@@ -419,6 +431,59 @@ TEMPLATE = """
 </div>
 
 {% endif %}
+
+<script>
+const CITY_TZ = {{ city_tz | tojson }};
+let showUtc = false;
+
+/* UTC 字符串 ("YYYY-MM-DD HH:MM:SS" 或 "YYYY-MM-DDTHH:MM:SSZ") → 转为指定时区的显示字符串 */
+function toLocal(utcStr, tz) {
+  const s = utcStr.includes('T') ? utcStr : utcStr.replace(' ', 'T') + 'Z';
+  const d = new Date(s);
+  if (isNaN(d)) return utcStr;
+  return d.toLocaleString('sv-SE', { timeZone: tz,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit' }).replace('T', ' ');
+}
+
+/* METAR 时间只显示 HH:MM */
+function toLocalHHMM(utcStr, tz) {
+  const s = utcStr.includes('T') ? utcStr : utcStr.replace(' ', 'T') + 'Z';
+  const d = new Date(s);
+  if (isNaN(d)) return utcStr;
+  return d.toLocaleTimeString('sv-SE', { timeZone: tz, hour: '2-digit', minute: '2-digit' });
+}
+
+function applyTz() {
+  /* obs_time / poll_time 列：完整 datetime */
+  document.querySelectorAll('.tc.obs-time, .tc.poll-time').forEach(el => {
+    const utc = el.dataset.utc;
+    el.textContent = showUtc ? utc : toLocal(utc, CITY_TZ);
+  });
+  /* METAR 时间：只显示 HH:MM */
+  document.querySelectorAll('.metar-time.tc').forEach(el => {
+    const utc = el.dataset.utc;
+    if (!utc) return;
+    el.textContent = showUtc
+      ? utc.includes('T') ? utc.slice(11, 16) + ' UTC' : utc
+      : toLocalHHMM(utc, CITY_TZ) + ' 本地';
+  });
+  /* 统计卡最新时间 */
+  const lt = document.getElementById('latest-obs-time');
+  if (lt) lt.textContent = showUtc ? lt.dataset.utc : toLocal(lt.dataset.utc, CITY_TZ);
+
+  /* 标签 */
+  document.getElementById('tz-label').textContent =
+    showUtc ? '时间：UTC' : `时间：本地时间（${CITY_TZ}）`;
+  document.getElementById('tz-btn').textContent =
+    showUtc ? '切换本地时间' : '切换 UTC';
+}
+
+function toggleTz() { showUtc = !showUtc; applyTz(); }
+
+/* 页面加载默认显示本地时间 */
+document.addEventListener('DOMContentLoaded', applyTz);
+</script>
 </body>
 </html>
 """
@@ -449,6 +514,7 @@ def index():
         selected_date  = date_str,
         city           = city,
         local_today    = local_today,
+        city_tz        = city["timezone"],
         rows           = rows,
         avg_temp       = avg_temp,
         quality_status = quality,
