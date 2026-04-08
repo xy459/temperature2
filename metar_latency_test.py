@@ -251,9 +251,8 @@ class METARLatencyTester:
             NOAAChannel(station),
             IEMChannel(station),
             OGIMETChannel(station),
+            AEMETChannel(station, aemet_key),
         ]
-        if aemet_key:
-            self.channels.append(AEMETChannel(station, aemet_key))
 
         self.results_csv = os.path.join(DATA_DIR, "metar_latency.csv")
         self.logfile = None
