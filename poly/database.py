@@ -362,3 +362,27 @@ def get_noaa_metar_observations(city_icao: str, date_str: str) -> List[Dict[str,
     rows = [dict(r) for r in c.fetchall()]
     conn.close()
     return rows
+
+
+def get_noaa_metar_by_utc_range(
+    city_icao: str, utc_start: str, utc_end: str
+) -> List[Dict[str, Any]]:
+    """返回指定城市 UTC 时间区间 [utc_start, utc_end] 内的 NOAA METAR 记录，按 obs_time 升序。
+    utc_start / utc_end 格式：'YYYY-MM-DD HH:MM:SS'
+    """
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT obs_time, temperature
+        FROM noaa_metar_observations
+        WHERE city_icao = ?
+          AND obs_time >= ?
+          AND obs_time <= ?
+        ORDER BY obs_time ASC
+        """,
+        (city_icao, utc_start, utc_end),
+    )
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows

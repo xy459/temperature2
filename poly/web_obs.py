@@ -16,7 +16,7 @@ import time
 from datetime import datetime, timezone, timedelta
 
 import requests
-from flask import Flask, render_template_string, request
+from flask import Flask, render_template_string, request, jsonify
 from zoneinfo import ZoneInfo
 
 import database as db
@@ -347,6 +347,244 @@ def calc_avg(rows):
 
 # ── HTML 模板 ─────────────────────────────────────────────────────────
 
+CHARTS_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>温度折线图</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         background: #f5f5f5; color: #333; padding: 24px; }
+
+  .nav { margin-bottom: 16px; font-size: 0.85rem; }
+  .nav a { color: #2563eb; text-decoration: none; }
+  .nav a:hover { text-decoration: underline; }
+
+  h1 { font-size: 1.2rem; font-weight: 600; margin-bottom: 16px; color: #111; }
+
+  .card { background: #fff; border-radius: 8px; padding: 16px;
+          margin-bottom: 20px; border: 1px solid #ddd; }
+
+  .form-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+  label { font-size: 0.8rem; color: #666; display: block; margin-bottom: 4px; }
+  input[type=date] { border: 1px solid #ccc; border-radius: 4px;
+    color: #333; padding: 6px 10px; font-size: 0.9rem; background: #fff; }
+  button { background: #2563eb; color: #fff; border: none; border-radius: 4px;
+           padding: 7px 18px; font-size: 0.9rem; cursor: pointer; }
+  button:hover { background: #1d4ed8; }
+
+  .charts-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+  @media (max-width: 960px)  { .charts-grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 600px)  { .charts-grid { grid-template-columns: 1fr; } }
+
+  .chart-card {
+    background: #fff;
+    border-radius: 8px;
+    border: 1px solid #ddd;
+    padding: 12px 14px 14px;
+  }
+
+  .chart-title {
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: #111;
+    margin-bottom: 10px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .chart-subtitle {
+    font-size: 0.72rem;
+    color: #999;
+    font-weight: 400;
+    margin-left: 5px;
+  }
+
+  .chart-wrap {
+    position: relative;
+    height: 180px;
+  }
+
+  .no-data {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: #bbb;
+    font-size: 0.82rem;
+  }
+
+  .loading-state {
+    text-align: center;
+    padding: 64px 0;
+    color: #999;
+    font-size: 0.9rem;
+  }
+  .error-state {
+    text-align: center;
+    padding: 64px 0;
+    color: #ef4444;
+    font-size: 0.9rem;
+  }
+</style>
+</head>
+<body>
+
+<div class="nav">← <a href="/">返回 Obs 数据查看</a></div>
+<h1>🌡 城市温度折线图（NOAA METAR）</h1>
+
+<div class="card">
+  <div class="form-row">
+    <div>
+      <label>日期（各城市本地日期）</label>
+      <input type="date" id="date-picker" value="{{ selected_date }}">
+    </div>
+    <div><button onclick="loadCharts()">查询</button></div>
+  </div>
+</div>
+
+<div id="charts-container">
+  <div class="loading-state">加载中…</div>
+</div>
+
+<script>
+/* UTC 字符串 → 该城市本地时间，以"假 UTC"形式返回 Date 对象（供 Chart.js 时间轴使用）。
+   原理：将 UTC 时间转成城市本地时间字符串，再解析为 Date（当作 UTC 处理），
+   这样 Chart.js 的 min/max 也以同样方式设置，整条轴就是本地时间刻度。 */
+function toFakeUTC(utcStr, tz) {
+  const d = new Date(utcStr.replace(' ', 'T') + 'Z');
+  const localStr = d.toLocaleString('sv-SE', { timeZone: tz }); // "YYYY-MM-DD HH:MM:SS"
+  return new Date(localStr.replace(' ', 'T') + 'Z');
+}
+
+const _chartInstances = [];
+
+async function loadCharts() {
+  const date = document.getElementById('date-picker').value;
+  if (!date) return;
+
+  const container = document.getElementById('charts-container');
+  container.innerHTML = '<div class="loading-state">加载中…</div>';
+
+  _chartInstances.forEach(c => c.destroy());
+  _chartInstances.length = 0;
+
+  let json;
+  try {
+    const resp = await fetch('/api/charts_data?date=' + date);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    json = await resp.json();
+  } catch (e) {
+    container.innerHTML = '<div class="error-state">加载失败：' + e.message + '</div>';
+    return;
+  }
+
+  const grid = document.createElement('div');
+  grid.className = 'charts-grid';
+  container.innerHTML = '';
+  container.appendChild(grid);
+
+  const dayStart = new Date(date + 'T00:00:00Z');
+  const dayEnd   = new Date(date + 'T23:59:59Z');
+
+  json.cities.forEach((city, idx) => {
+    const card = document.createElement('div');
+    card.className = 'chart-card';
+
+    const points = (city.data || [])
+      .filter(d => d.temperature !== null && d.temperature !== undefined)
+      .map(d => ({ x: toFakeUTC(d.obs_time, city.timezone), y: d.temperature }));
+
+    const bodyHtml = points.length === 0
+      ? '<div class="no-data">暂无数据</div>'
+      : '<canvas id="cv-' + idx + '"></canvas>';
+
+    card.innerHTML =
+      '<div class="chart-title">' + city.name_cn +
+      '<span class="chart-subtitle">' + city.name + ' · ' + city.icao + '</span></div>' +
+      '<div class="chart-wrap">' + bodyHtml + '</div>';
+    grid.appendChild(card);
+
+    if (points.length === 0) return;
+
+    const ctx = document.getElementById('cv-' + idx).getContext('2d');
+    const chart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        datasets: [{
+          data: points,
+          borderColor: '#2563eb',
+          backgroundColor: 'rgba(37,99,235,0.07)',
+          borderWidth: 1.8,
+          pointRadius: 2.5,
+          pointHoverRadius: 5,
+          pointBackgroundColor: '#2563eb',
+          fill: true,
+          tension: 0.35,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title: (items) => {
+                const dt = new Date(items[0].parsed.x);
+                const h  = String(dt.getUTCHours()).padStart(2, '0');
+                const m  = String(dt.getUTCMinutes()).padStart(2, '0');
+                return h + ':' + m + ' 本地';
+              },
+              label: (item) => item.parsed.y + '°C',
+            }
+          }
+        },
+        scales: {
+          x: {
+            type: 'time',
+            min: dayStart,
+            max: dayEnd,
+            time: {
+              unit: 'hour',
+              displayFormats: { hour: 'HH:mm' },
+            },
+            ticks: { maxTicksLimit: 7, font: { size: 10 }, color: '#999' },
+            grid:  { color: '#f0f0f0' },
+            border: { color: '#e5e5e5' },
+          },
+          y: {
+            ticks: {
+              callback: (v) => v + '°',
+              font: { size: 10 },
+              color: '#999',
+            },
+            grid:  { color: '#f0f0f0' },
+            border: { color: '#e5e5e5' },
+          }
+        }
+      }
+    });
+    _chartInstances.push(chart);
+  });
+}
+
+document.addEventListener('DOMContentLoaded', loadCharts);
+</script>
+</body>
+</html>
+"""
+
 TEMPLATE = """
 <!DOCTYPE html>
 <html lang="zh">
@@ -412,7 +650,13 @@ TEMPLATE = """
 </style>
 </head>
 <body>
-<h1>🌡 Obs 数据查看</h1>
+<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;">
+  <h1 style="margin-bottom:0;">🌡 Obs 数据查看</h1>
+  <a href="/charts" style="font-size:0.85rem; color:#2563eb; text-decoration:none;
+     border:1px solid #2563eb; border-radius:4px; padding:5px 14px;">
+    📈 折线图总览
+  </a>
+</div>
 
 <div class="card">
   <form method="get" action="/">
@@ -597,6 +841,45 @@ document.addEventListener('DOMContentLoaded', applyTz);
 
 
 # ── Flask 路由 ────────────────────────────────────────────────────────
+
+@app.route("/charts")
+def charts():
+    today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    selected_date = request.args.get("date", today_utc)
+    return render_template_string(CHARTS_TEMPLATE, selected_date=selected_date)
+
+
+@app.route("/api/charts_data")
+def charts_data():
+    today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    date_str = request.args.get("date", today_utc)
+
+    try:
+        year  = int(date_str[0:4])
+        month = int(date_str[5:7])
+        day   = int(date_str[8:10])
+    except (ValueError, IndexError):
+        return jsonify({"error": "invalid date"}), 400
+
+    result = []
+    for city in CITIES:
+        tz = ZoneInfo(city["timezone"])
+        local_start = datetime(year, month, day, 0, 0, 0, tzinfo=tz)
+        local_end   = datetime(year, month, day, 23, 59, 59, tzinfo=tz)
+        utc_start   = local_start.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        utc_end     = local_end.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+        rows = db.get_noaa_metar_by_utc_range(city["icao"], utc_start, utc_end)
+        result.append({
+            "icao":     city["icao"],
+            "name":     city["name"],
+            "name_cn":  city["name_cn"],
+            "timezone": city["timezone"],
+            "data":     rows,
+        })
+
+    return jsonify({"date": date_str, "cities": result})
+
 
 @app.route("/")
 def index():
