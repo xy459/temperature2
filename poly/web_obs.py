@@ -484,8 +484,8 @@ TEMPLATE = """
         <th>当日最高 (°C)</th>
         <th id="th-poll">poll_time</th>
         <th>⌊均温⌋</th>
-        <th>当前时段 METAR</th>
         <th>上一时段 METAR</th>
+        <th>当前时段 METAR</th>
         <th>NOAA METAR</th>
       </tr>
     </thead>
@@ -505,17 +505,17 @@ TEMPLATE = """
           {% endif %}
         </td>
         <td>
-          {% if r.curr_metar_temp is not none %}
-            <span class="metar-val">{{ r.curr_metar_temp }}°C</span>
-            <span class="metar-time tc" data-utc="{{ r.curr_metar_time }}">{{ r.curr_metar_time }}</span>
+          {% if r.prev_metar_temp is not none %}
+            <span class="metar-val">{{ r.prev_metar_temp }}°C</span>
+            <span class="metar-time tc" data-utc="{{ r.prev_metar_time }}">{{ r.prev_metar_time }}</span>
           {% else %}
             <span class="metar-val none">—</span>
           {% endif %}
         </td>
         <td>
-          {% if r.prev_metar_temp is not none %}
-            <span class="metar-val">{{ r.prev_metar_temp }}°C</span>
-            <span class="metar-time tc" data-utc="{{ r.prev_metar_time }}">{{ r.prev_metar_time }}</span>
+          {% if r.curr_metar_temp is not none %}
+            <span class="metar-val">{{ r.curr_metar_temp }}°C</span>
+            <span class="metar-time tc" data-utc="{{ r.curr_metar_time }}">{{ r.curr_metar_time }}</span>
           {% else %}
             <span class="metar-val none">—</span>
           {% endif %}
@@ -649,6 +649,13 @@ if __name__ == "__main__":
 
     # 启动后台轮询线程
     start_poll_thread()
+
+    # 过滤外部扫描机器人发来的 TLS 握手包产生的 werkzeug 噪声日志
+    class _TLSProbeFilter(logging.Filter):
+        def filter(self, record):
+            return "Bad request version" not in record.getMessage()
+
+    logging.getLogger("werkzeug").addFilter(_TLSProbeFilter())
 
     print("启动 Obs 数据查看工具：http://localhost:5050")
     app.run(host="0.0.0.0", port=5050, debug=False)
