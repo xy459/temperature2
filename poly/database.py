@@ -98,6 +98,22 @@ def init_db():
     """)
 
     c.execute("""
+        CREATE TABLE IF NOT EXISTS multi_channel_obs (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            city_icao   TEXT     NOT NULL,
+            channel     TEXT     NOT NULL,
+            obs_time    DATETIME NOT NULL,
+            temperature REAL,
+            fetched_at  DATETIME NOT NULL,
+            UNIQUE(city_icao, channel, obs_time)
+        )
+    """)
+    c.execute("""
+        CREATE INDEX IF NOT EXISTS idx_multi_channel_city_ch_time
+        ON multi_channel_obs(city_icao, channel, obs_time DESC)
+    """)
+
+    c.execute("""
         CREATE TABLE IF NOT EXISTS settings (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -382,6 +398,130 @@ def get_noaa_metar_by_utc_range(
         ORDER BY obs_time ASC
         """,
         (city_icao, utc_start, utc_end),
+    )
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+
+# ── metar_observations by UTC range ──────────────────────────────────
+
+def get_metar_by_utc_range(
+    city_icao: str, utc_start: str, utc_end: str
+) -> List[Dict[str, Any]]:
+    """返回指定城市 UTC 时间区间内的 WU METAR 记录，按 obs_time 升序。"""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT obs_time, temperature
+        FROM metar_observations
+        WHERE city_icao = ?
+          AND obs_time >= ?
+          AND obs_time <= ?
+        ORDER BY obs_time ASC
+        """,
+        (city_icao, utc_start, utc_end),
+    )
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+
+# ── observations by UTC range ─────────────────────────────────────────
+
+def get_obs_by_utc_range(
+    city_icao: str, utc_start: str, utc_end: str
+) -> List[Dict[str, Any]]:
+    """返回指定城市 UTC 时间区间内的 WU obs 记录，按 obs_time 升序。"""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT obs_time, temperature
+        FROM observations
+        WHERE city_icao = ?
+          AND obs_time >= ?
+          AND obs_time <= ?
+        ORDER BY obs_time ASC
+        """,
+        (city_icao, utc_start, utc_end),
+    )
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+
+# ── multi_channel_obs ─────────────────────────────────────────────────
+
+def insert_multi_channel_obs(
+    city_icao: str, channel: str, obs_time: str, temperature
+) -> bool:
+    """插入一条多渠道观测记录，已存在则跳过。返回是否为新数据。"""
+    fetched_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO multi_channel_obs
+              (city_icao, channel, obs_time, temperature, fetched_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (city_icao, channel, obs_time, temperature, fetched_at),
+        )
+        conn.commit()
+        return conn.total_changes > 0
+    finally:
+        conn.close()
+
+
+def insert_multi_channel_obs_batch(
+    city_icao: str, channel: str, obs_list: list
+) -> int:
+    """
+    批量写入多渠道观测记录，已存在的自动跳过。
+    obs_list 每项：{"obs_time": "YYYY-MM-DD HH:MM:SS", "temperature": float|None}
+    返回实际新写入的条数。
+    """
+    if not obs_list:
+        return 0
+    fetched_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_conn()
+    before = conn.total_changes
+    conn.executemany(
+        """
+        INSERT OR IGNORE INTO multi_channel_obs
+          (city_icao, channel, obs_time, temperature, fetched_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        [
+            (city_icao, channel, o["obs_time"], o.get("temperature"), fetched_at)
+            for o in obs_list
+        ],
+    )
+    conn.commit()
+    inserted = conn.total_changes - before
+    conn.close()
+    return inserted
+
+
+def get_multi_channel_by_utc_range(
+    city_icao: str, channel: str, utc_start: str, utc_end: str
+) -> List[Dict[str, Any]]:
+    """返回指定城市指定渠道 UTC 时间区间内的记录，按 obs_time 升序。"""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT obs_time, temperature
+        FROM multi_channel_obs
+        WHERE city_icao = ?
+          AND channel = ?
+          AND obs_time >= ?
+          AND obs_time <= ?
+        ORDER BY obs_time ASC
+        """,
+        (city_icao, channel, utc_start, utc_end),
     )
     rows = [dict(r) for r in c.fetchall()]
     conn.close()

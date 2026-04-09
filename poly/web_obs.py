@@ -3,8 +3,13 @@
 运行：python web_obs.py
 访问：http://localhost:5050
 
-启动时：全量拉取所有城市当天 METAR 数据存入 SQLite。
-后台线程：每 5 分钟轮询一次，自动感知城市本地跨天。
+启动时：全量拉取所有城市当天数据（6 渠道）存入 SQLite。
+后台线程：自适应轮询
+  非活跃期（17:00~10:00 本地）：固定 8 分钟
+  活跃期（11:00~17:00 本地）：
+    HUNTING  — 步进 30→30→45→45→60s，找到新数据进入 COOLDOWN
+    COOLDOWN_A（前 2/3 T）— 每 5 分钟
+    COOLDOWN_B（后 1/3 T）— 每 2 分钟，耗尽回 HUNTING
 切换日期：若目标日期无数据则即时补拉，有数据则直接读库。
 """
 import logging
@@ -21,7 +26,7 @@ from zoneinfo import ZoneInfo
 
 import database as db
 from cities import CITIES
-from config import WU_API_KEY
+from config import WU_API_KEY, WEATHERAPI_KEY, AVWX_TOKEN
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,9 +41,33 @@ _CITY_MAP = {c["icao"]: c for c in CITIES}
 _SESSION = requests.Session()
 _SESSION.headers.update({"User-Agent": "PolyTempBot/1.0"})
 
-V1_BASE       = "https://api.weather.com/v1/location/{icao}:9:{country}/observations/historical.json"
-NOAA_BASE     = "https://aviationweather.gov/api/data/metar?ids={icao}&format=raw&taf=false"
-POLL_INTERVAL = 5 * 60  # 秒
+V1_BASE         = "https://api.weather.com/v1/location/{icao}:9:{country}/observations/historical.json"
+NOAA_BASE       = "https://aviationweather.gov/api/data/metar?ids={icao}&format=raw&taf=false"
+IEM_BASE        = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py"
+WEATHERAPI_BASE = "http://api.weatherapi.com/v1/current.json"
+AVWX_BASE       = "https://avwx.rest/api/metar/{icao}"
+
+# ── 自适应轮询配置 ────────────────────────────────────────────────────
+# 活跃期：城市本地 11:00~17:00，HUNTING→COOLDOWN 状态机
+# 非活跃期：城市本地 17:00~次日10:00，固定 8 分钟
+ACTIVE_HOUR_START   = 11           # 活跃期开始（本地时间，含）
+ACTIVE_HOUR_END     = 17           # 活跃期结束（本地时间，不含）
+OFFPEAK_INTERVAL    = 8 * 60       # 非活跃期固定间隔（秒）
+HUNT_STEPS          = [30, 30, 45, 45, 60]  # HUNTING 步进序列（秒），末位封顶
+COOLDOWN_A_INTERVAL = 5 * 60       # COOLDOWN Phase A 轮询间隔（秒）
+COOLDOWN_B_INTERVAL = 2 * 60       # COOLDOWN Phase B 轮询间隔（秒）
+COOLDOWN_A_RATIO    = 2 / 3        # Phase A 占预期更新周期 T 的比例
+POLL_TICK           = 10           # 主循环最小唤醒间隔（秒）
+
+# 各渠道预期更新周期 T（秒）—— 用于计算 COOLDOWN Phase A/B 切换时刻
+_CHANNEL_CYCLE: dict[str, int] = {
+    "wu_metar":   30 * 60,
+    "noaa":       30 * 60,
+    "iem":        30 * 60,
+    "avwx":       30 * 60,
+    "weatherapi": 15 * 60,
+}
+_ALL_CHANNELS = list(_CHANNEL_CYCLE.keys())
 
 # 匹配 METAR 温度/露点组，如 18/06、M02/M10、09/M03
 _NOAA_TEMP_RE = re.compile(r'\b(M?\d{1,2})/(M?\d{1,2})\b')
@@ -144,6 +173,139 @@ def fetch_and_store_noaa(icao: str) -> tuple:
     return inserted, ""
 
 
+# ── IEM ASOS 拉取 ─────────────────────────────────────────────────────
+
+def _fetch_iem(icao: str, date_str: str):
+    """
+    拉取 IEM ASOS CSV（含 METAR + SPECI），返回 (obs_list, error_msg)。
+    obs_list 每项：{"obs_time": "YYYY-MM-DD HH:MM:SS", "temperature": float}
+    """
+    year, month, day = int(date_str[:4]), int(date_str[5:7]), int(date_str[8:10])
+    params = {
+        "station": icao,
+        "data": "tmpf",
+        "tz": "Etc/UTC",
+        "format": "onlycomma",
+        "latlon": "no",
+        "missing": "M",
+        "direct": "no",
+        "report_type": ["3", "4"],
+        "year1": year, "month1": month, "day1": day,
+        "year2": year, "month2": month, "day2": day,
+    }
+    try:
+        resp = _SESSION.get(IEM_BASE, params=params, timeout=15)
+        resp.raise_for_status()
+        lines = resp.text.strip().split("\n")
+    except Exception as e:
+        return [], str(e)
+
+    if len(lines) < 2:
+        return [], ""
+
+    header = [h.strip() for h in lines[0].split(",")]
+    col = {h: i for i, h in enumerate(header)}
+
+    result = []
+    for line in lines[1:]:
+        parts = line.split(",")
+        if len(parts) < len(header):
+            continue
+        valid_str = parts[col.get("valid", 1)].strip()
+        tmpf_str  = parts[col.get("tmpf", -1)].strip() if "tmpf" in col else "M"
+
+        if tmpf_str == "M" or not tmpf_str:
+            continue
+        try:
+            temp_c = round((float(tmpf_str) - 32) * 5 / 9, 1)
+        except ValueError:
+            continue
+
+        try:
+            dt = datetime.strptime(valid_str, "%Y-%m-%d %H:%M")
+            obs_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+
+        result.append({"obs_time": obs_time, "temperature": temp_c})
+
+    return result, ""
+
+
+def fetch_and_store_iem(city: dict, date_str: str) -> tuple:
+    """拉取 IEM ASOS 数据并写库，返回 (新增条数, error_msg)。"""
+    obs_list, err = _fetch_iem(city["icao"], date_str)
+    if err:
+        return 0, err
+    inserted = db.insert_multi_channel_obs_batch(city["icao"], "iem", obs_list)
+    return inserted, ""
+
+
+# ── WeatherAPI 拉取 ───────────────────────────────────────────────────
+
+def fetch_and_store_weatherapi(icao: str) -> tuple:
+    """拉取 WeatherAPI 最新观测并写库，返回 (is_new: bool, error_msg: str)。"""
+    if not WEATHERAPI_KEY:
+        return False, "WEATHERAPI_KEY 未配置"
+    try:
+        resp = _SESSION.get(
+            WEATHERAPI_BASE,
+            params={"key": WEATHERAPI_KEY, "q": f"metar:{icao}", "aqi": "no"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        return False, str(e)
+
+    cur        = data.get("current", {})
+    temp_c     = cur.get("temp_c")
+    last_epoch = cur.get("last_updated_epoch")
+
+    if temp_c is None or last_epoch is None:
+        return False, "无有效数据"
+
+    obs_time = datetime.fromtimestamp(last_epoch, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    inserted = db.insert_multi_channel_obs(icao, "weatherapi", obs_time, temp_c)
+    return inserted, ""
+
+
+# ── AVWX 拉取 ────────────────────────────────────────────────────────
+
+def fetch_and_store_avwx(icao: str) -> tuple:
+    """拉取 AVWX 最新 METAR 并写库，返回 (is_new: bool, error_msg: str)。"""
+    if not AVWX_TOKEN:
+        return False, "AVWX_TOKEN 未配置"
+    try:
+        resp = _SESSION.get(
+            AVWX_BASE.format(icao=icao),
+            headers={"Authorization": f"BEARER {AVWX_TOKEN}"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        return False, str(e)
+
+    temp_info = data.get("temperature", {})
+    temp_c    = temp_info.get("value") if isinstance(temp_info, dict) else None
+
+    time_info = data.get("time", {})
+    time_dt   = time_info.get("dt", "") if isinstance(time_info, dict) else ""
+
+    if temp_c is None or not time_dt:
+        return False, "无有效数据"
+
+    try:
+        dt = datetime.fromisoformat(time_dt.replace("Z", "+00:00"))
+        obs_time = dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return False, f"时间解析失败: {time_dt}"
+
+    inserted = db.insert_multi_channel_obs(icao, "avwx", obs_time, temp_c)
+    return inserted, ""
+
+
 # ── 启动全量初始化 ────────────────────────────────────────────────────
 
 def init_metar_all():
@@ -175,45 +337,236 @@ def init_noaa_metar_all():
     logger.info("[noaa] 初始化完成")
 
 
+def init_iem_all():
+    """程序启动时，为所有城市拉取当天 IEM ASOS 全量并写库。"""
+    logger.info("[iem] 启动全量初始化，共 %d 个城市", len(CITIES))
+    total_new = 0
+    for city in CITIES:
+        today = _city_local_date(city)
+        inserted, err = fetch_and_store_iem(city, today)
+        if err:
+            logger.error("[iem] 初始化失败 %s (%s): %s", city["name"], city["icao"], err)
+        else:
+            total_new += inserted
+            logger.info("[iem] %s (%s) %s → +%d 条",
+                        city["name"], city["icao"], today, inserted)
+    logger.info("[iem] 初始化完成，共新增 %d 条", total_new)
+
+
+def init_weatherapi_all():
+    """程序启动时，为所有城市拉取最新 WeatherAPI 数据并写库。"""
+    if not WEATHERAPI_KEY:
+        logger.warning("[weatherapi] WEATHERAPI_KEY 未配置，跳过初始化")
+        return
+    logger.info("[weatherapi] 启动初始化，共 %d 个城市", len(CITIES))
+    for city in CITIES:
+        is_new, err = fetch_and_store_weatherapi(city["icao"])
+        if err:
+            logger.error("[weatherapi] 初始化失败 %s (%s): %s", city["name"], city["icao"], err)
+        else:
+            logger.info("[weatherapi] %s (%s) → %s", city["name"], city["icao"],
+                        "新数据" if is_new else "已存在")
+    logger.info("[weatherapi] 初始化完成")
+
+
+def init_avwx_all():
+    """程序启动时，为所有城市拉取最新 AVWX METAR 并写库。"""
+    if not AVWX_TOKEN:
+        logger.warning("[avwx] AVWX_TOKEN 未配置，跳过初始化")
+        return
+    logger.info("[avwx] 启动初始化，共 %d 个城市", len(CITIES))
+    for city in CITIES:
+        is_new, err = fetch_and_store_avwx(city["icao"])
+        if err:
+            logger.error("[avwx] 初始化失败 %s (%s): %s", city["name"], city["icao"], err)
+        else:
+            logger.info("[avwx] %s (%s) → %s", city["name"], city["icao"],
+                        "新数据" if is_new else "已存在")
+    logger.info("[avwx] 初始化完成")
+
+
 # ── 后台轮询线程 ──────────────────────────────────────────────────────
 
 def _city_local_date(city: dict) -> str:
     return datetime.now(ZoneInfo(city["timezone"])).strftime("%Y-%m-%d")
 
 
+# ── 轮询状态机 ───────────────────────────────────────────────────────
+# 每个 (icao, channel) 对独立维护一个状态字典：
+#   mode         : "offpeak" | "hunting" | "cooldown_a" | "cooldown_b"
+#   hunt_step    : HUNT_STEPS 当前索引
+#   next_poll_at : time.monotonic() 时间戳，到达时才执行下次轮询
+#   phase_b_at   : COOLDOWN_A → COOLDOWN_B 的切换时刻
+#   phase_end_at : COOLDOWN 结束（→ HUNTING）的时刻
+
+def _make_state() -> dict:
+    """创建初始状态：HUNTING，立即可轮询（next_poll_at=0）。"""
+    return {
+        "mode":         "hunting",
+        "hunt_step":    0,
+        "next_poll_at": 0.0,
+        "phase_b_at":   0.0,
+        "phase_end_at": 0.0,
+    }
+
+
+def _enter_offpeak(state: dict, now: float) -> None:
+    state["mode"]         = "offpeak"
+    state["next_poll_at"] = now + OFFPEAK_INTERVAL
+
+
+def _enter_hunting(state: dict, now: float) -> None:
+    state["mode"]         = "hunting"
+    state["hunt_step"]    = 0
+    state["next_poll_at"] = now + HUNT_STEPS[0]
+
+
+def _enter_cooldown(state: dict, channel: str, now: float) -> None:
+    """进入（或重置）COOLDOWN，从 now 重新计算 Phase A/B 边界。"""
+    T = _CHANNEL_CYCLE[channel]
+    state["mode"]         = "cooldown_a"
+    state["hunt_step"]    = 0
+    state["phase_b_at"]   = now + T * COOLDOWN_A_RATIO
+    state["phase_end_at"] = now + T
+    state["next_poll_at"] = now + COOLDOWN_A_INTERVAL
+
+
+def _advance_state(state: dict, channel: str, is_new: bool, now: float) -> None:
+    """根据本次轮询结果推进状态机，更新 next_poll_at。"""
+    mode = state["mode"]
+
+    if mode == "offpeak":
+        state["next_poll_at"] = now + OFFPEAK_INTERVAL
+        return
+
+    if mode == "hunting":
+        if is_new:
+            _enter_cooldown(state, channel, now)
+        else:
+            step = min(state["hunt_step"] + 1, len(HUNT_STEPS) - 1)
+            state["hunt_step"]    = step
+            state["next_poll_at"] = now + HUNT_STEPS[step]
+        return
+
+    # cooldown_a 或 cooldown_b
+    if is_new:
+        _enter_cooldown(state, channel, now)   # 重置 COOLDOWN 计时
+        return
+
+    if now >= state["phase_end_at"]:           # COOLDOWN 自然耗尽 → HUNTING
+        _enter_hunting(state, now)
+    elif now >= state["phase_b_at"]:           # Phase A 结束 → Phase B
+        state["mode"]         = "cooldown_b"
+        state["next_poll_at"] = now + COOLDOWN_B_INTERVAL
+    else:                                      # 继续 Phase A
+        state["next_poll_at"] = now + COOLDOWN_A_INTERVAL
+
+
+# ── 渠道调度层 ───────────────────────────────────────────────────────
+
+def _do_poll(city: dict, channel: str, today: str) -> tuple:
+    """
+    执行单次轮询，返回 (is_new: bool, error_msg: str)。
+    统一各渠道返回格式，屏蔽内部差异。
+    """
+    icao = city["icao"]
+    if channel == "wu_metar":
+        inserted, err = fetch_and_store(city, today)
+        return inserted > 0, err
+    if channel == "noaa":
+        return fetch_and_store_noaa(icao)
+    if channel == "iem":
+        inserted, err = fetch_and_store_iem(city, today)
+        return inserted > 0, err
+    if channel == "weatherapi":
+        if not WEATHERAPI_KEY:
+            return False, ""
+        return fetch_and_store_weatherapi(icao)
+    if channel == "avwx":
+        if not AVWX_TOKEN:
+            return False, ""
+        return fetch_and_store_avwx(icao)
+    return False, f"未知渠道: {channel}"
+
+
 def _poll_loop():
     """
-    每 5 分钟对所有城市拉取当天 METAR。
-    自动感知城市本地跨天：当城市本地日期变化时，切换到新的一天继续拉取。
-    """
-    # 记录每个城市上次轮询使用的本地日期
-    last_date: dict = {}
+    自适应轮询：每 POLL_TICK 秒唤醒，按各 (城市×渠道) 状态机决定是否执行轮询。
 
-    logger.info("[metar] 后台轮询线程启动，间隔 %d 秒", POLL_INTERVAL)
+    时段划分（城市本地时间）：
+      活跃期  11:00~17:00 — HUNTING→COOLDOWN_A→COOLDOWN_B 状态机
+      非活跃期 17:00~10:00 — 固定 8 分钟
+
+    HUNTING 步进：[30, 30, 45, 45, 60]s，找到新数据后进入 COOLDOWN。
+    COOLDOWN_A：前 2/3×T，每 5 分钟；COOLDOWN_B：后 1/3×T，每 2 分钟。
+    Phase B 自然耗尽 → 重回 HUNTING。找到新数据随时重置 COOLDOWN。
+    """
+    # 初始化所有城市×渠道状态（next_poll_at=0 → 启动后立即执行首次轮询）
+    _state: dict[tuple, dict] = {
+        (city["icao"], ch): _make_state()
+        for city in CITIES
+        for ch in _ALL_CHANNELS
+    }
+    last_date: dict[str, str] = {}
+
+    logger.info("[poll] 自适应轮询线程启动 (tick=%ds, 活跃期 %d:00~%d:00)",
+                POLL_TICK, ACTIVE_HOUR_START, ACTIVE_HOUR_END)
+
     while True:
-        time.sleep(POLL_INTERVAL)
+        now = time.monotonic()
+
         for city in CITIES:
-            icao  = city["icao"]
-            today = _city_local_date(city)
+            icao     = city["icao"]
+            tz       = ZoneInfo(city["timezone"])
+            local_dt = datetime.now(tz)
+            today    = local_dt.strftime("%Y-%m-%d")
+            is_active = ACTIVE_HOUR_START <= local_dt.hour < ACTIVE_HOUR_END
 
             if last_date.get(icao) != today:
-                logger.info("[metar] %s 切换到新的一天 %s", city["name"], today)
+                logger.info("[poll] %s 切换到新的一天 %s", city["name"], today)
+                last_date[icao] = today
 
-            inserted, err = fetch_and_store(city, today)
-            if err:
-                logger.error("[metar] 轮询失败 %s (%s): %s", city["name"], icao, err)
-            elif inserted > 0:
-                logger.info("[metar] %s (%s) %s → +%d 条新数据",
-                            city["name"], icao, today, inserted)
+            for ch in _ALL_CHANNELS:
+                key   = (icao, ch)
+                state = _state[key]
+                mode  = state["mode"]
 
-            # NOAA METAR 轮询
-            is_new, err = fetch_and_store_noaa(icao)
-            if err:
-                logger.debug("[noaa] 轮询失败 %s (%s): %s", city["name"], icao, err)
-            elif is_new:
-                logger.info("[noaa] %s (%s) → 新 METAR", city["name"], icao)
+                # ── 时段切换检测 ────────────────────────────────────
+                if is_active and mode == "offpeak":
+                    _enter_hunting(state, now)
+                    logger.info("[poll] %s/%s 进入活跃期 → HUNTING", icao, ch)
+                    continue   # 刚重置，等下一 tick 再轮询
 
-            last_date[icao] = today
+                elif not is_active and mode != "offpeak":
+                    _enter_offpeak(state, now)
+                    logger.info("[poll] %s/%s 进入非活跃期 → OFFPEAK(%ds)", icao, ch, OFFPEAK_INTERVAL)
+                    continue
+
+                # ── 未到轮询时刻，跳过 ──────────────────────────────
+                if now < state["next_poll_at"]:
+                    continue
+
+                # ── 执行轮询 ────────────────────────────────────────
+                is_new, err = _do_poll(city, ch, today)
+
+                if err:
+                    log_fn = logger.error if ch == "wu_metar" else logger.debug
+                    log_fn("[%s] 轮询失败 %s: %s", ch, icao, err)
+                elif is_new:
+                    logger.info("[%s] %s → 新数据 | %s → cooldown",
+                                ch, icao, state["mode"])
+
+                # ── 推进状态机 ──────────────────────────────────────
+                prev_mode = state["mode"]
+                _advance_state(state, ch, is_new, now)
+                new_mode  = state["mode"]
+
+                if prev_mode != new_mode:
+                    logger.debug("[%s] %s 状态切换 %s → %s (next +%ds)",
+                                 ch, icao, prev_mode, new_mode,
+                                 int(state["next_poll_at"] - now))
+
+        time.sleep(POLL_TICK)
 
 
 def start_poll_thread():
@@ -397,7 +750,7 @@ CHARTS_TEMPLATE = """
     font-size: 0.88rem;
     font-weight: 600;
     color: #111;
-    margin-bottom: 10px;
+    margin-bottom: 6px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -411,7 +764,7 @@ CHARTS_TEMPLATE = """
 
   .chart-wrap {
     position: relative;
-    height: 180px;
+    height: 240px;
   }
 
   .no-data {
@@ -440,7 +793,7 @@ CHARTS_TEMPLATE = """
 <body>
 
 <div class="nav">← <a href="/">返回 Obs 数据查看</a></div>
-<h1>🌡 城市温度折线图（NOAA METAR）</h1>
+<h1>🌡 城市温度折线图（多数据源）</h1>
 
 <div class="card">
   <div class="form-row">
@@ -457,16 +810,29 @@ CHARTS_TEMPLATE = """
 </div>
 
 <script>
-/* UTC 字符串 → 该城市本地时间，以"浏览器本地时间"形式返回毫秒时间戳。
-   原理：将 UTC 时间转成城市本地时间字符串（如 "2026-04-09 08:30:00"），
-   再不加 Z 解析为 Date——浏览器将其视为本地时区时刻，Chart.js 标签就会显示
-   该字符串对应的时:分，无论浏览器在哪个时区都正确。
-   dayStart/dayEnd 也用同样方式构造，三者时区基准一致。 */
+/* UTC 字符串 → 该城市本地时间，以"浏览器本地时间"形式返回 Date。
+   原理：将 UTC 转成城市本地时间字符串，再不加 Z 解析为 Date——
+   浏览器将其视为本地时区时刻，Chart.js 标签就会显示该字符串对应的时:分。 */
 function toFakeLocal(utcStr, tz) {
   const d = new Date(utcStr.replace(' ', 'T') + 'Z');
-  const localStr = d.toLocaleString('sv-SE', { timeZone: tz }); // "YYYY-MM-DD HH:MM:SS"
-  return new Date(localStr.replace(' ', 'T'));                  // 无 Z → 浏览器本地时间
+  const localStr = d.toLocaleString('sv-SE', { timeZone: tz });
+  return new Date(localStr.replace(' ', 'T'));
 }
+
+/* 根据温度值决定显示精度：有小数位则保留1位，否则显示整数 */
+function fmtTemp(v) {
+  if (v === null || v === undefined) return '—';
+  return (v % 1 !== 0) ? v.toFixed(1) + '°C' : Math.round(v) + '°C';
+}
+
+const SERIES_CONFIG = [
+  { key: 'noaa',       label: 'NOAA METAR', color: '#2563eb', width: 1.8, radius: 2.5 },
+  { key: 'wu_metar',   label: 'WU METAR',   color: '#ea580c', width: 1.5, radius: 2   },
+  { key: 'wu_obs',     label: 'WU obs',     color: '#dc2626', width: 1.5, radius: 2   },
+  { key: 'iem',        label: 'IEM',        color: '#16a34a', width: 1.5, radius: 2   },
+  { key: 'weatherapi', label: 'WeatherAPI', color: '#9333ea', width: 1.5, radius: 2   },
+  { key: 'avwx',       label: 'AVWX',       color: '#0891b2', width: 1.5, radius: 2   },
+];
 
 const _chartInstances = [];
 
@@ -503,13 +869,30 @@ async function loadCharts() {
     const card = document.createElement('div');
     card.className = 'chart-card';
 
-    const points = (city.data || [])
-      .filter(d => d.temperature !== null && d.temperature !== undefined)
-      .map(d => ({ x: toFakeLocal(d.obs_time, city.timezone).getTime(), y: d.temperature }));
+    // 构建每个数据源的数据点
+    const datasets = SERIES_CONFIG.map(cfg => {
+      const raw = (city.series && city.series[cfg.key]) || [];
+      const pts = raw
+        .filter(d => d.temperature !== null && d.temperature !== undefined)
+        .map(d => ({ x: toFakeLocal(d.obs_time, city.timezone).getTime(), y: d.temperature }));
+      return {
+        label: cfg.label,
+        data: pts,
+        borderColor: cfg.color,
+        backgroundColor: 'transparent',
+        borderWidth: cfg.width,
+        pointRadius: cfg.radius,
+        pointHoverRadius: cfg.radius + 2,
+        pointBackgroundColor: cfg.color,
+        tension: 0.35,
+        fill: false,
+      };
+    });
 
-    const bodyHtml = points.length === 0
-      ? '<div class="no-data">暂无数据</div>'
-      : '<canvas id="cv-' + idx + '"></canvas>';
+    const hasAnyData = datasets.some(ds => ds.data.length > 0);
+    const bodyHtml = hasAnyData
+      ? '<canvas id="cv-' + idx + '"></canvas>'
+      : '<div class="no-data">暂无数据</div>';
 
     card.innerHTML =
       '<div class="chart-title">' + city.name_cn +
@@ -518,30 +901,31 @@ async function loadCharts() {
       '<div class="chart-wrap">' + bodyHtml + '</div>';
     grid.appendChild(card);
 
-    if (points.length === 0) return;
+    if (!hasAnyData) return;
 
     const ctx = document.getElementById('cv-' + idx).getContext('2d');
     const chart = new Chart(ctx, {
       type: 'line',
-      data: {
-        datasets: [{
-          data: points,
-          borderColor: '#2563eb',
-          backgroundColor: 'rgba(37,99,235,0.07)',
-          borderWidth: 1.8,
-          pointRadius: 2.5,
-          pointHoverRadius: 5,
-          pointBackgroundColor: '#2563eb',
-          fill: true,
-          tension: 0.35,
-        }]
-      },
+      data: { datasets },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         animation: false,
+        interaction: { mode: 'index', intersect: false },
         plugins: {
-          legend: { display: false },
+          legend: {
+            display: true,
+            position: 'bottom',
+            labels: {
+              boxWidth: 12,
+              boxHeight: 2,
+              padding: 8,
+              font: { size: 10 },
+              color: '#555',
+              usePointStyle: true,
+              pointStyle: 'line',
+            },
+          },
           tooltip: {
             callbacks: {
               title: (items) => {
@@ -550,7 +934,7 @@ async function loadCharts() {
                 const m  = String(dt.getMinutes()).padStart(2, '0');
                 return h + ':' + m + ' 本地';
               },
-              label: (item) => item.parsed.y + '°C',
+              label: (item) => ' ' + item.dataset.label + ': ' + fmtTemp(item.parsed.y),
             }
           }
         },
@@ -874,25 +1258,32 @@ def charts_data():
         utc_end     = local_end.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
         # 用当天正午计算该城市的 UTC 偏移（避免夏令时边界干扰）
-        noon        = datetime(year, month, day, 12, 0, 0, tzinfo=tz)
-        offset_sec  = noon.utcoffset().total_seconds()
-        offset_h    = int(offset_sec // 3600)
-        offset_m    = int((abs(offset_sec) % 3600) // 60)
-        sign        = "+" if offset_sec >= 0 else "-"
-        utc_offset  = (
+        noon       = datetime(year, month, day, 12, 0, 0, tzinfo=tz)
+        offset_sec = noon.utcoffset().total_seconds()
+        offset_h   = int(offset_sec // 3600)
+        offset_m   = int((abs(offset_sec) % 3600) // 60)
+        sign       = "+" if offset_sec >= 0 else "-"
+        utc_offset = (
             f"UTC{sign}{abs(offset_h)}:{offset_m:02d}"
             if offset_m else
             f"UTC{sign}{abs(offset_h)}"
         )
 
-        rows = db.get_noaa_metar_by_utc_range(city["icao"], utc_start, utc_end)
+        icao = city["icao"]
         result.append({
-            "icao":       city["icao"],
+            "icao":       icao,
             "name":       city["name"],
             "name_cn":    city["name_cn"],
             "timezone":   city["timezone"],
             "utc_offset": utc_offset,
-            "data":       rows,
+            "series": {
+                "noaa":       db.get_noaa_metar_by_utc_range(icao, utc_start, utc_end),
+                "wu_metar":   db.get_metar_by_utc_range(icao, utc_start, utc_end),
+                "wu_obs":     db.get_obs_by_utc_range(icao, utc_start, utc_end),
+                "iem":        db.get_multi_channel_by_utc_range(icao, "iem", utc_start, utc_end),
+                "weatherapi": db.get_multi_channel_by_utc_range(icao, "weatherapi", utc_start, utc_end),
+                "avwx":       db.get_multi_channel_by_utc_range(icao, "avwx", utc_start, utc_end),
+            },
         })
 
     return jsonify({"date": date_str, "cities": result})
@@ -946,6 +1337,9 @@ if __name__ == "__main__":
     # 启动全量初始化（同步，确保首次访问前数据就绪）
     init_metar_all()
     init_noaa_metar_all()
+    init_iem_all()
+    init_weatherapi_all()
+    init_avwx_all()
 
     # 启动后台轮询线程
     start_poll_thread()

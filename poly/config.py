@@ -36,3 +36,7 @@ SIGNATURE_TYPE   = int(os.getenv("SIGNATURE_TYPE", "2"))
 
 # ── Gamma API ────────────────────────────────────────────────────────
 GAMMA_API_BASE = "https://gamma-api.polymarket.com"
+
+# ── 多渠道气象 API ───────────────────────────────────────────────────
+WEATHERAPI_KEY = os.getenv("WEATHERAPI_KEY", "")
+AVWX_TOKEN     = os.getenv("AVWX_TOKEN", "")
