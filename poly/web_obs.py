@@ -457,13 +457,15 @@ CHARTS_TEMPLATE = """
 </div>
 
 <script>
-/* UTC 字符串 → 该城市本地时间，以"假 UTC"形式返回 Date 对象（供 Chart.js 时间轴使用）。
-   原理：将 UTC 时间转成城市本地时间字符串，再解析为 Date（当作 UTC 处理），
-   这样 Chart.js 的 min/max 也以同样方式设置，整条轴就是本地时间刻度。 */
-function toFakeUTC(utcStr, tz) {
+/* UTC 字符串 → 该城市本地时间，以"浏览器本地时间"形式返回毫秒时间戳。
+   原理：将 UTC 时间转成城市本地时间字符串（如 "2026-04-09 08:30:00"），
+   再不加 Z 解析为 Date——浏览器将其视为本地时区时刻，Chart.js 标签就会显示
+   该字符串对应的时:分，无论浏览器在哪个时区都正确。
+   dayStart/dayEnd 也用同样方式构造，三者时区基准一致。 */
+function toFakeLocal(utcStr, tz) {
   const d = new Date(utcStr.replace(' ', 'T') + 'Z');
   const localStr = d.toLocaleString('sv-SE', { timeZone: tz }); // "YYYY-MM-DD HH:MM:SS"
-  return new Date(localStr.replace(' ', 'T') + 'Z');
+  return new Date(localStr.replace(' ', 'T'));                  // 无 Z → 浏览器本地时间
 }
 
 const _chartInstances = [];
@@ -493,9 +495,9 @@ async function loadCharts() {
   container.innerHTML = '';
   container.appendChild(grid);
 
-  // 用毫秒时间戳传给 Chart.js，避免 date-fns adapter 解析 Date 对象时的兼容问题
-  const dayStart = new Date(date + 'T00:00:00.000Z').getTime();
-  const dayEnd   = new Date(date + 'T23:59:59.999Z').getTime();
+  // 无 Z → 浏览器本地时间，与 toFakeLocal 保持同一时区基准
+  const dayStart = new Date(date + 'T00:00:00').getTime();
+  const dayEnd   = new Date(date + 'T23:59:59').getTime();
 
   json.cities.forEach((city, idx) => {
     const card = document.createElement('div');
@@ -503,7 +505,7 @@ async function loadCharts() {
 
     const points = (city.data || [])
       .filter(d => d.temperature !== null && d.temperature !== undefined)
-      .map(d => ({ x: toFakeUTC(d.obs_time, city.timezone).getTime(), y: d.temperature }));
+      .map(d => ({ x: toFakeLocal(d.obs_time, city.timezone).getTime(), y: d.temperature }));
 
     const bodyHtml = points.length === 0
       ? '<div class="no-data">暂无数据</div>'
@@ -544,8 +546,8 @@ async function loadCharts() {
             callbacks: {
               title: (items) => {
                 const dt = new Date(items[0].parsed.x);
-                const h  = String(dt.getUTCHours()).padStart(2, '0');
-                const m  = String(dt.getUTCMinutes()).padStart(2, '0');
+                const h  = String(dt.getHours()).padStart(2, '0');
+                const m  = String(dt.getMinutes()).padStart(2, '0');
                 return h + ':' + m + ' 本地';
               },
               label: (item) => item.parsed.y + '°C',
