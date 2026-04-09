@@ -493,8 +493,9 @@ async function loadCharts() {
   container.innerHTML = '';
   container.appendChild(grid);
 
-  const dayStart = new Date(date + 'T00:00:00Z');
-  const dayEnd   = new Date(date + 'T23:59:59Z');
+  // 用毫秒时间戳传给 Chart.js，避免 date-fns adapter 解析 Date 对象时的兼容问题
+  const dayStart = new Date(date + 'T00:00:00.000Z').getTime();
+  const dayEnd   = new Date(date + 'T23:59:59.999Z').getTime();
 
   json.cities.forEach((city, idx) => {
     const card = document.createElement('div');
@@ -502,7 +503,7 @@ async function loadCharts() {
 
     const points = (city.data || [])
       .filter(d => d.temperature !== null && d.temperature !== undefined)
-      .map(d => ({ x: toFakeUTC(d.obs_time, city.timezone), y: d.temperature }));
+      .map(d => ({ x: toFakeUTC(d.obs_time, city.timezone).getTime(), y: d.temperature }));
 
     const bodyHtml = points.length === 0
       ? '<div class="no-data">暂无数据</div>'
@@ -510,7 +511,8 @@ async function loadCharts() {
 
     card.innerHTML =
       '<div class="chart-title">' + city.name_cn +
-      '<span class="chart-subtitle">' + city.name + ' · ' + city.icao + '</span></div>' +
+      '<span class="chart-subtitle">' + city.name + ' · ' + city.icao +
+      ' <span style="color:#2563eb;font-size:0.68rem;">' + city.utc_offset + '</span></span></div>' +
       '<div class="chart-wrap">' + bodyHtml + '</div>';
     grid.appendChild(card);
 
@@ -869,13 +871,26 @@ def charts_data():
         utc_start   = local_start.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         utc_end     = local_end.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
+        # 用当天正午计算该城市的 UTC 偏移（避免夏令时边界干扰）
+        noon        = datetime(year, month, day, 12, 0, 0, tzinfo=tz)
+        offset_sec  = noon.utcoffset().total_seconds()
+        offset_h    = int(offset_sec // 3600)
+        offset_m    = int((abs(offset_sec) % 3600) // 60)
+        sign        = "+" if offset_sec >= 0 else "-"
+        utc_offset  = (
+            f"UTC{sign}{abs(offset_h)}:{offset_m:02d}"
+            if offset_m else
+            f"UTC{sign}{abs(offset_h)}"
+        )
+
         rows = db.get_noaa_metar_by_utc_range(city["icao"], utc_start, utc_end)
         result.append({
-            "icao":     city["icao"],
-            "name":     city["name"],
-            "name_cn":  city["name_cn"],
-            "timezone": city["timezone"],
-            "data":     rows,
+            "icao":       city["icao"],
+            "name":       city["name"],
+            "name_cn":    city["name_cn"],
+            "timezone":   city["timezone"],
+            "utc_offset": utc_offset,
+            "data":       rows,
         })
 
     return jsonify({"date": date_str, "cities": result})
