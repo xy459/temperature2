@@ -89,10 +89,16 @@ def _process_city(city: dict) -> None:
         return
 
     # ── STEP 3: 计算均温（向下取整）──────────────────────────────────
-    t1_temp = obs[0]["temperature"]
-    t2_temp = obs[1]["temperature"]
+    t1_temp  = obs[0]["temperature"]
+    t2_temp  = obs[1]["temperature"]
     avg_temp = math.floor((t1_temp + t2_temp) / 2)
-    logger.debug("[trader] %s avg=floor((%s+%s)/2)=%d°C", name, t1_temp, t2_temp, avg_temp)
+    logger.info(
+        "[trader] %s(%s) obs: t1=%s°C @ %s  t2=%s°C @ %s  → avg=floor((%s+%s)/2)=%d°C",
+        name_cn, icao,
+        t1_temp, obs[0]["obs_time"],
+        t2_temp, obs[1]["obs_time"],
+        t1_temp, t2_temp, avg_temp,
+    )
 
     # ── STEP 4: 获取当日市场档口 ──────────────────────────────────────
     event_date = get_today_local_date(city)
@@ -102,6 +108,8 @@ def _process_city(city: dict) -> None:
     if not markets:
         logger.warning("[trader] %s 未找到当日市场: %s", name, event_slug)
         return
+
+    logger.debug("[trader] %s 获取到 %d 个档口  slug=%s", name, len(markets), event_slug)
 
     # ── STEP 5 & 6: 遍历档口，判断并执行 ─────────────────────────────
     for market in markets:
@@ -132,25 +140,28 @@ def _process_city(city: dict) -> None:
 
             # 检查是否已触发
             if db.is_triggered(icao, event_date, bracket_temp, offset):
-                logger.debug(
-                    "[trader] %s bracket=%d offset=%d 已触发，跳过",
-                    name, bracket_temp, offset,
+                logger.info(
+                    "[trader] %s(%s) bracket=%d offset=%d 今日已触发，跳过  date=%s",
+                    name_cn, icao, bracket_temp, offset, event_date,
                 )
                 continue
 
             logger.info(
-                "[trader] %s 触发条件：avg=%d offset=%d → bracket=%d  price=%.2f size=%.0f",
-                name, avg_temp, offset, bracket_temp, price, size,
+                "[trader] >>> 触发买入 %s(%s)  avg=%d°C  offset=%+d → bracket=%d°C  "
+                "price=%.4f  size=%.0f  预计花费=%.2f USDC  date=%s  token=%s...",
+                name_cn, icao, avg_temp, offset, bracket_temp,
+                price, size, price * size,
+                event_date, no_token_id[:16],
             )
 
             _execute_order(
-                city       = city,
-                event_date = event_date,
+                city         = city,
+                event_date   = event_date,
                 bracket_temp = bracket_temp,
-                offset     = offset,
-                no_token_id = no_token_id,
-                price      = price,
-                size       = size,
+                offset       = offset,
+                no_token_id  = no_token_id,
+                price        = price,
+                size         = size,
             )
 
 
@@ -165,23 +176,54 @@ def _execute_order(
 ) -> None:
     icao    = city["icao"]
     name    = city["name"]
+    name_cn = city["name_cn"]
     wallet  = wallet_manager.get_next_wallet()
 
+    logger.info(
+        "[trader] [1/4] 标记触发  %s(%s)  bracket=%d°C  offset=%+d  钱包=%s",
+        name_cn, icao, bracket_temp, offset, wallet.funder_display,
+    )
+
+    # 先标记已触发（乐观锁），防止网络异常后重试导致重复买入
+    if not db.mark_triggered(icao, event_date, bracket_temp, offset):
+        logger.warning(
+            "[trader] %s(%s) bracket=%d offset=%+d 已被其他流程标记，跳过",
+            name_cn, icao, bracket_temp, offset,
+        )
+        return
+
     # 检查 USDC 余额
+    logger.info(
+        "[trader] [2/4] 查询余额  钱包=%s  需要=%.2f USDC（price=%.4f × size=%.0f）",
+        wallet.funder_display, price * size, price, size,
+    )
     try:
-        balance = clob_wrapper.get_usdc_balance(wallet.private_key, wallet.funder)
+        balance  = clob_wrapper.get_usdc_balance(wallet.private_key, wallet.funder)
         required = price * size
+        logger.info(
+            "[trader]        余额查询结果：当前=%.2f USDC  需要=%.2f USDC  剩余=%.2f USDC  钱包=%s",
+            balance, required, balance - required, wallet.funder_display,
+        )
         if balance < required:
             logger.error(
-                "[trader] %s USDC 余额不足：需要 %.2f，当前 %.2f（%s），跳过",
-                name, required, balance, wallet.funder_display,
+                "[trader] %s(%s) USDC 余额不足：需要 %.2f，当前 %.2f（%s），跳过",
+                name_cn, icao, required, balance, wallet.funder_display,
             )
             return
     except Exception as e:
-        logger.error("[trader] %s 查询 USDC 余额失败 (%s): %s，跳过", name, wallet.funder_display, e)
+        logger.error(
+            "[trader] %s(%s) 查询 USDC 余额失败 (%s): %s，跳过",
+            name_cn, icao, wallet.funder_display, e,
+        )
         return
 
     # 执行 FAK 买单
+    logger.info(
+        "[trader] [3/4] 提交下单  %s(%s)  bracket=%d°C  offset=%+d  "
+        "token=%s...  price=%.4f  size=%.0f  钱包=%s",
+        name_cn, icao, bracket_temp, offset,
+        no_token_id[:16], price, size, wallet.funder_display,
+    )
     try:
         result = clob_wrapper.place_limit_buy_no(
             no_token_id = no_token_id,
@@ -192,8 +234,8 @@ def _execute_order(
         )
     except Exception as e:
         logger.error(
-            "[trader] %s bracket=%d offset=%d 下单失败 (%s): %s",
-            name, bracket_temp, offset, wallet.funder_display, e,
+            "[trader] %s(%s) bracket=%d offset=%+d 下单失败 (%s): %s",
+            name_cn, icao, bracket_temp, offset, wallet.funder_display, e,
         )
         db.insert_order(
             city_icao    = icao,
@@ -210,8 +252,7 @@ def _execute_order(
         )
         return
 
-    # 下单成功：写 trade_state + orders
-    db.mark_triggered(icao, event_date, bracket_temp, offset)
+    # 下单成功：写 orders
     db.insert_order(
         city_icao    = icao,
         event_date   = event_date,
@@ -226,10 +267,13 @@ def _execute_order(
         raw_response = result["raw"],
     )
 
+    actual_cost = result["shares_filled"] * price if result["shares_filled"] else 0.0
     logger.info(
-        "[trader] ✓ 下单完成 %s bracket=%d offset=%d  order_id=%s status=%s filled=%.0f",
-        name, bracket_temp, offset,
+        "[trader] [4/4] ✓ 下单完成  %s(%s)  bracket=%d°C  offset=%+d  "
+        "order_id=%s  status=%s  filled=%.0f股  实际花费≈%.2f USDC  钱包=%s  date=%s",
+        name_cn, icao, bracket_temp, offset,
         result["order_id"], result["status"], result["shares_filled"],
+        actual_cost, wallet.funder_display, event_date,
     )
 
 
@@ -237,8 +281,14 @@ def _trade_loop() -> None:
     """交易主循环，顺序处理所有城市。"""
     logger.info("[trader] 交易线程启动，共 %d 个城市，间隔 %ds",
                 len(CITIES), TRADE_CHECK_INTERVAL_SECONDS)
+    round_no = 0
     while True:
-        start = time.monotonic()
+        round_no += 1
+        start    = time.monotonic()
+        now_str  = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        logger.info("[trader] ── 第 %d 轮开始  %s  共 %d 城市 ──",
+                    round_no, now_str, len(CITIES))
+
         for city in CITIES:
             try:
                 _process_city(city)
@@ -247,7 +297,8 @@ def _trade_loop() -> None:
 
         elapsed    = time.monotonic() - start
         sleep_time = max(0, TRADE_CHECK_INTERVAL_SECONDS - elapsed)
-        logger.debug("[trader] 本轮完成，耗时 %.1fs，等待 %.1fs", elapsed, sleep_time)
+        logger.info("[trader] ── 第 %d 轮结束  耗时 %.1fs，下一轮等待 %.1fs ──",
+                    round_no, elapsed, sleep_time)
         time.sleep(sleep_time)
 
 
