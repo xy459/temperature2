@@ -2,6 +2,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 # 摄氏度城市；web_obs 多渠道：WU 历史 METAR、NOAA、IEM、WeatherAPI、AVWX（各渠道按 ICAO）
+# 可选：wu_v1=False 表示关闭 WU V1 历史 API（IBM 对部分 ICAO:9:CC 返回 400 时使用）
 # Moscow / Tel Aviv / Istanbul：已纳入；香港（VHHH）暂不纳入
 # 排除：所有美国城市（WU 华氏度）
 CITIES = [
@@ -36,7 +37,7 @@ CITIES = [
     {"name": "Panama City",   "name_cn": "巴拿马城",        "icao": "MPMG", "country": "PA", "slug": "panama-city",   "timezone": "America/Panama"},
     {"name": "Moscow",        "name_cn": "莫斯科",          "icao": "UUWW", "country": "RU", "slug": "moscow",        "timezone": "Europe/Moscow"},
     {"name": "Tel Aviv",      "name_cn": "特拉维夫",        "icao": "LLBG", "country": "IL", "slug": "tel-aviv",      "timezone": "Asia/Jerusalem"},
-    {"name": "Istanbul",      "name_cn": "伊斯坦布尔",      "icao": "LTFM", "country": "TR", "slug": "istanbul",      "timezone": "Europe/Istanbul"},
+    {"name": "Istanbul",      "name_cn": "伊斯坦布尔",      "icao": "LTFM", "country": "TR", "slug": "istanbul",      "timezone": "Europe/Istanbul", "wu_v1": False},
 ]
 
 

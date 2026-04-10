@@ -69,6 +69,14 @@ _CHANNEL_CYCLE: dict[str, int] = {
 }
 _ALL_CHANNELS = list(_CHANNEL_CYCLE.keys())
 
+
+def _channels_for_city(city: dict) -> list[str]:
+    """WU V1 不可用时为该城市去掉 wu_metar 轮询（避免反复 400）。"""
+    if city.get("wu_v1", True):
+        return _ALL_CHANNELS
+    return [c for c in _ALL_CHANNELS if c != "wu_metar"]
+
+
 # 匹配 METAR 温度/露点组，如 18/06、M02/M10、09/M03
 _NOAA_TEMP_RE = re.compile(r'\b(M?\d{1,2})/(M?\d{1,2})\b')
 
@@ -107,6 +115,8 @@ def _fetch_v1(icao: str, country: str, date_str: str):
 
 def fetch_and_store(city: dict, date_str: str) -> tuple:
     """拉取指定城市指定日期的 WU METAR 并写库，返回 (新增条数, error_msg)。"""
+    if not city.get("wu_v1", True):
+        return 0, ""
     obs_list, err = _fetch_v1(city["icao"], city["country"], date_str)
     if err:
         return 0, err
@@ -502,11 +512,10 @@ def _poll_loop():
     Phase B 自然耗尽 → 重回 HUNTING。找到新数据随时重置 COOLDOWN。
     """
     # 初始化所有城市×渠道状态（next_poll_at=0 → 启动后立即执行首次轮询）
-    _state: dict[tuple, dict] = {
-        (city["icao"], ch): _make_state()
-        for city in CITIES
-        for ch in _ALL_CHANNELS
-    }
+    _state: dict[tuple, dict] = {}
+    for city in CITIES:
+        for ch in _channels_for_city(city):
+            _state[(city["icao"], ch)] = _make_state()
     last_date: dict[str, str] = {}
 
     logger.info("[poll] 自适应轮询线程启动 (tick=%ds, 活跃期 %d:00~%d:00)",
@@ -526,7 +535,7 @@ def _poll_loop():
                 logger.info("[poll] %s 切换到新的一天 %s", city["name"], today)
                 last_date[icao] = today
 
-            for ch in _ALL_CHANNELS:
+            for ch in _channels_for_city(city):
                 key   = (icao, ch)
                 state = _state[key]
                 mode  = state["mode"]
