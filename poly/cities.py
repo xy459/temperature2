@@ -1,9 +1,9 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-# 仅包含 WU 数据源 + 摄氏度 的城市
-# 排除：Moscow / Tel Aviv / Istanbul / Hong Kong（非WU）
-# 排除：所有美国城市（华氏度）
+# 摄氏度城市；web_obs 多渠道：WU 历史 METAR、NOAA、IEM、WeatherAPI、AVWX（各渠道按 ICAO）
+# Moscow / Tel Aviv / Istanbul：已纳入；香港（VHHH）暂不纳入
+# 排除：所有美国城市（WU 华氏度）
 CITIES = [
     {"name": "Madrid",        "name_cn": "马德里",          "icao": "LEMD", "country": "ES", "slug": "madrid",        "timezone": "Europe/Madrid"},
     {"name": "London",        "name_cn": "伦敦",            "icao": "EGLC", "country": "GB", "slug": "london",        "timezone": "Europe/London"},
@@ -34,6 +34,9 @@ CITIES = [
     {"name": "Sao Paulo",     "name_cn": "圣保罗",          "icao": "SBGR", "country": "BR", "slug": "sao-paulo",     "timezone": "America/Sao_Paulo"},
     {"name": "Mexico City",   "name_cn": "墨西哥城",        "icao": "MMMX", "country": "MX", "slug": "mexico-city",   "timezone": "America/Mexico_City"},
     {"name": "Panama City",   "name_cn": "巴拿马城",        "icao": "MPMG", "country": "PA", "slug": "panama-city",   "timezone": "America/Panama"},
+    {"name": "Moscow",        "name_cn": "莫斯科",          "icao": "UUWW", "country": "RU", "slug": "moscow",        "timezone": "Europe/Moscow"},
+    {"name": "Tel Aviv",      "name_cn": "特拉维夫",        "icao": "LLBG", "country": "IL", "slug": "tel-aviv",      "timezone": "Asia/Jerusalem"},
+    {"name": "Istanbul",      "name_cn": "伊斯坦布尔",      "icao": "LTFM", "country": "TR", "slug": "istanbul",      "timezone": "Europe/Istanbul"},
 ]
 
 
