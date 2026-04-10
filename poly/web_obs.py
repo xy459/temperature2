@@ -71,10 +71,13 @@ _ALL_CHANNELS = list(_CHANNEL_CYCLE.keys())
 
 
 def _channels_for_city(city: dict) -> list[str]:
-    """WU V1 不可用时为该城市去掉 wu_metar 轮询（避免反复 400）。"""
-    if city.get("wu_v1", True):
-        return _ALL_CHANNELS
-    return [c for c in _ALL_CHANNELS if c != "wu_metar"]
+    """按城市去掉不可用渠道，避免反复 400 / 无效请求。"""
+    chs = _ALL_CHANNELS
+    if not city.get("wu_v1", True):
+        chs = [c for c in chs if c != "wu_metar"]
+    if not city.get("avwx", True):
+        chs = [c for c in chs if c != "avwx"]
+    return chs
 
 
 # 匹配 METAR 温度/露点组，如 18/06、M02/M10、09/M03
@@ -282,8 +285,11 @@ def fetch_and_store_weatherapi(icao: str) -> tuple:
 
 # ── AVWX 拉取 ────────────────────────────────────────────────────────
 
-def fetch_and_store_avwx(icao: str) -> tuple:
+def fetch_and_store_avwx(city: dict) -> tuple:
     """拉取 AVWX 最新 METAR 并写库，返回 (is_new: bool, error_msg: str)。"""
+    icao = city["icao"]
+    if not city.get("avwx", True):
+        return False, ""
     if not AVWX_TOKEN:
         return False, "AVWX_TOKEN 未配置"
     try:
@@ -386,7 +392,9 @@ def init_avwx_all():
         return
     logger.info("[avwx] 启动初始化，共 %d 个城市", len(CITIES))
     for city in CITIES:
-        is_new, err = fetch_and_store_avwx(city["icao"])
+        if not city.get("avwx", True):
+            continue
+        is_new, err = fetch_and_store_avwx(city)
         if err:
             logger.error("[avwx] 初始化失败 %s (%s): %s", city["name"], city["icao"], err)
         else:
@@ -495,7 +503,7 @@ def _do_poll(city: dict, channel: str, today: str) -> tuple:
     if channel == "avwx":
         if not AVWX_TOKEN:
             return False, ""
-        return fetch_and_store_avwx(icao)
+        return fetch_and_store_avwx(city)
     return False, f"未知渠道: {channel}"
 
 
