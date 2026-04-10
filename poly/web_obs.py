@@ -1322,23 +1322,32 @@ def charts_data():
         )
 
         icao = city["icao"]
-        result.append({
-            "icao":       icao,
-            "name":       city["name"],
-            "name_cn":    city["name_cn"],
-            "timezone":   city["timezone"],
-            "utc_offset": utc_offset,
-            "series": {
-                "noaa":       db.get_noaa_metar_by_utc_range(icao, utc_start, utc_end),
-                "wu_metar":   db.get_metar_by_utc_range(icao, utc_start, utc_end),
-                "wu_obs":     db.get_obs_by_utc_range(icao, utc_start, utc_end),
-                "iem":        db.get_multi_channel_by_utc_range(icao, "iem", utc_start, utc_end),
-                "weatherapi": db.get_multi_channel_by_utc_range(icao, "weatherapi", utc_start, utc_end),
-                "avwx":       db.get_multi_channel_by_utc_range(icao, "avwx", utc_start, utc_end),
-            },
-        })
+        result.append(
+            (
+                offset_sec,
+                {
+                    "icao":       icao,
+                    "name":       city["name"],
+                    "name_cn":    city["name_cn"],
+                    "timezone":   city["timezone"],
+                    "utc_offset": utc_offset,
+                    "series": {
+                        "noaa":       db.get_noaa_metar_by_utc_range(icao, utc_start, utc_end),
+                        "wu_metar":   db.get_metar_by_utc_range(icao, utc_start, utc_end),
+                        "wu_obs":     db.get_obs_by_utc_range(icao, utc_start, utc_end),
+                        "iem":        db.get_multi_channel_by_utc_range(icao, "iem", utc_start, utc_end),
+                        "weatherapi": db.get_multi_channel_by_utc_range(icao, "weatherapi", utc_start, utc_end),
+                        "avwx":       db.get_multi_channel_by_utc_range(icao, "avwx", utc_start, utc_end),
+                    },
+                },
+            )
+        )
 
-    return jsonify({"date": date_str, "cities": result})
+    # 从东向西：当日 UTC 偏移从大到小（与所选图表日期、夏令时一致）
+    result.sort(key=lambda x: x[0], reverse=True)
+    cities_out = [item[1] for item in result]
+
+    return jsonify({"date": date_str, "cities": cities_out})
 
 
 @app.route("/")
