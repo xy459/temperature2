@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 cd "$(dirname "$0")"
 
-PIDS=$(ps aux | grep "[m]ain.py" | awk '{print $2}')
+PIDS=$(ps aux | grep "[w]eb_obs.py" | awk '{print $2}')
 
 if [ -z "$PIDS" ]; then
     echo "未找到运行中的进程"
