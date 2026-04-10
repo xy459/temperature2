@@ -751,15 +751,20 @@ CHARTS_TEMPLATE = """
     font-weight: 600;
     color: #111;
     margin-bottom: 6px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    line-height: 1.35;
+    white-space: normal;
   }
   .chart-subtitle {
     font-size: 0.72rem;
     color: #999;
     font-weight: 400;
     margin-left: 5px;
+  }
+  .chart-local-time {
+    font-size: 0.68rem;
+    color: #64748b;
+    font-weight: 400;
+    margin-left: 0.35rem;
   }
 
   .chart-wrap {
@@ -825,6 +830,47 @@ function fmtTemp(v) {
   return (v % 1 !== 0) ? v.toFixed(1) + '°C' : Math.round(v) + '°C';
 }
 
+/** 机场 IANA 时区当前本地时间：月日时分（无年、秒），与 DST 一致 */
+function formatCityLocalNow(tz) {
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: tz,
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date());
+  const g = (type) => {
+    const p = parts.find((x) => x.type === type);
+    return p ? p.value : '';
+  };
+  return g('month') + '月' + g('day') + '日 ' + g('hour') + ':' + g('minute');
+}
+
+function updateChartLocalTimes() {
+  document.querySelectorAll('.chart-local-time[data-tz]').forEach((el) => {
+    const tz = el.getAttribute('data-tz');
+    try {
+      el.textContent = formatCityLocalNow(tz);
+    } catch (e) {
+      el.textContent = '';
+    }
+  });
+}
+
+let _localTimeIntervalId = null;
+function stopChartLocalTimeTicker() {
+  if (_localTimeIntervalId) {
+    clearInterval(_localTimeIntervalId);
+    _localTimeIntervalId = null;
+  }
+}
+function startChartLocalTimeTicker() {
+  stopChartLocalTimeTicker();
+  updateChartLocalTimes();
+  _localTimeIntervalId = setInterval(updateChartLocalTimes, 60000);
+}
+
 const SERIES_CONFIG = [
   { key: 'noaa',       label: 'NOAA METAR', color: '#2563eb', width: 1.8, radius: 2.5 },
   { key: 'wu_metar',   label: 'WU METAR',   color: '#ea580c', width: 1.5, radius: 2   },
@@ -839,6 +885,8 @@ const _chartInstances = [];
 async function loadCharts() {
   const date = document.getElementById('date-picker').value;
   if (!date) return;
+
+  stopChartLocalTimeTicker();
 
   const container = document.getElementById('charts-container');
   container.innerHTML = '<div class="loading-state">加载中…</div>';
@@ -897,7 +945,8 @@ async function loadCharts() {
     card.innerHTML =
       '<div class="chart-title">' + city.name_cn +
       '<span class="chart-subtitle">' + city.name + ' · ' + city.icao +
-      ' <span style="color:#2563eb;font-size:0.68rem;">' + city.utc_offset + '</span></span></div>' +
+      ' <span style="color:#2563eb;font-size:0.68rem;">' + city.utc_offset + '</span>' +
+      '<span class="chart-local-time" data-tz="' + city.timezone + '"></span></span></div>' +
       '<div class="chart-wrap">' + bodyHtml + '</div>';
     grid.appendChild(card);
 
@@ -965,6 +1014,8 @@ async function loadCharts() {
     });
     _chartInstances.push(chart);
   });
+
+  startChartLocalTimeTicker();
 }
 
 document.addEventListener('DOMContentLoaded', loadCharts);
@@ -1260,13 +1311,14 @@ def charts_data():
         # 用当天正午计算该城市的 UTC 偏移（避免夏令时边界干扰）
         noon       = datetime(year, month, day, 12, 0, 0, tzinfo=tz)
         offset_sec = noon.utcoffset().total_seconds()
-        offset_h   = int(offset_sec // 3600)
-        offset_m   = int((abs(offset_sec) % 3600) // 60)
-        sign       = "+" if offset_sec >= 0 else "-"
+        sign = "+" if offset_sec >= 0 else "-"
+        total = int(abs(offset_sec))
+        offset_h = total // 3600
+        offset_m = (total % 3600) // 60
         utc_offset = (
-            f"UTC{sign}{abs(offset_h)}:{offset_m:02d}"
+            f"UTC{sign}{offset_h}:{offset_m:02d}"
             if offset_m else
-            f"UTC{sign}{abs(offset_h)}"
+            f"UTC{sign}{offset_h}"
         )
 
         icao = city["icao"]
