@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 # 可选：wu_v1=False 关闭 WU V1；avwx=False 关闭 AVWX（如俄罗斯/白俄罗斯机场被 API 屏蔽）
 # Moscow / Tel Aviv / Istanbul：已纳入；香港（VHHH）暂不纳入
 # 排除：所有美国城市（WU 华氏度）
+# 2026-04 起：广州/拉各斯/马尼拉/卡拉奇/开普敦/吉达（ICAO 与 Polymarket 温度盘口规则内 Wunderground 链接一致，见 city_exclusions.md）
 CITIES = [
     {"name": "Madrid",        "name_cn": "马德里",          "icao": "LEMD", "country": "ES", "slug": "madrid",        "timezone": "Europe/Madrid"},
     {"name": "London",        "name_cn": "伦敦",            "icao": "EGLC", "country": "GB", "slug": "london",        "timezone": "Europe/London"},
@@ -23,20 +24,26 @@ CITIES = [
     {"name": "Wuhan",         "name_cn": "武汉",            "icao": "ZHHH", "country": "CN", "slug": "wuhan",         "timezone": "Asia/Shanghai"},
     {"name": "Chengdu",       "name_cn": "成都",            "icao": "ZUUU", "country": "CN", "slug": "chengdu",       "timezone": "Asia/Shanghai"},
     {"name": "Shenzhen",      "name_cn": "深圳",            "icao": "ZGSZ", "country": "CN", "slug": "shenzhen",      "timezone": "Asia/Shanghai"},
+    {"name": "Guangzhou",     "name_cn": "广州",            "icao": "ZGGG", "country": "CN", "slug": "guangzhou",     "timezone": "Asia/Shanghai"},
     {"name": "Taipei",        "name_cn": "台北",            "icao": "RCSS", "country": "TW", "slug": "taipei",        "timezone": "Asia/Taipei"},
     {"name": "Singapore",     "name_cn": "新加坡",          "icao": "WSSS", "country": "SG", "slug": "singapore",     "timezone": "Asia/Singapore"},
     {"name": "Kuala Lumpur",  "name_cn": "吉隆坡",          "icao": "WMKK", "country": "MY", "slug": "kuala-lumpur",  "timezone": "Asia/Kuala_Lumpur"},
     {"name": "Jakarta",       "name_cn": "雅加达",          "icao": "WIHH", "country": "ID", "slug": "jakarta",       "timezone": "Asia/Jakarta"},
+    {"name": "Manila",        "name_cn": "马尼拉",          "icao": "RPLL", "country": "PH", "slug": "manila",        "timezone": "Asia/Manila"},
     {"name": "Busan",         "name_cn": "釜山",            "icao": "RKPK", "country": "KR", "slug": "busan",         "timezone": "Asia/Seoul"},
     {"name": "Lucknow",       "name_cn": "勒克瑙",          "icao": "VILK", "country": "IN", "slug": "lucknow",       "timezone": "Asia/Kolkata"},
+    {"name": "Karachi",       "name_cn": "卡拉奇",          "icao": "OPKC", "country": "PK", "slug": "karachi",       "timezone": "Asia/Karachi"},
     {"name": "Wellington",    "name_cn": "惠灵顿",          "icao": "NZWN", "country": "NZ", "slug": "wellington",    "timezone": "Pacific/Auckland"},
     {"name": "Toronto",       "name_cn": "多伦多",          "icao": "CYYZ", "country": "CA", "slug": "toronto",       "timezone": "America/Toronto"},
     {"name": "Buenos Aires",  "name_cn": "布宜诺斯艾利斯",   "icao": "SAEZ", "country": "AR", "slug": "buenos-aires",  "timezone": "America/Argentina/Buenos_Aires"},
+    {"name": "Cape Town",     "name_cn": "开普敦",          "icao": "FACT", "country": "ZA", "slug": "cape-town",     "timezone": "Africa/Johannesburg"},
     {"name": "Sao Paulo",     "name_cn": "圣保罗",          "icao": "SBGR", "country": "BR", "slug": "sao-paulo",     "timezone": "America/Sao_Paulo"},
     {"name": "Mexico City",   "name_cn": "墨西哥城",        "icao": "MMMX", "country": "MX", "slug": "mexico-city",   "timezone": "America/Mexico_City"},
     {"name": "Panama City",   "name_cn": "巴拿马城",        "icao": "MPMG", "country": "PA", "slug": "panama-city",   "timezone": "America/Panama"},
+    {"name": "Lagos",         "name_cn": "拉各斯",          "icao": "DNMM", "country": "NG", "slug": "lagos",         "timezone": "Africa/Lagos"},
     {"name": "Moscow",        "name_cn": "莫斯科",          "icao": "UUWW", "country": "RU", "slug": "moscow",        "timezone": "Europe/Moscow", "avwx": False},
     {"name": "Tel Aviv",      "name_cn": "特拉维夫",        "icao": "LLBG", "country": "IL", "slug": "tel-aviv",      "timezone": "Asia/Jerusalem"},
+    {"name": "Jeddah",        "name_cn": "吉达",            "icao": "OEJN", "country": "SA", "slug": "jeddah",        "timezone": "Asia/Riyadh"},
     {"name": "Istanbul",      "name_cn": "伊斯坦布尔",      "icao": "LTFM", "country": "TR", "slug": "istanbul",      "timezone": "Europe/Istanbul", "wu_v1": False},
 ]
 

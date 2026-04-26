@@ -43,17 +43,33 @@
 |---|---|
 | ✅ 符合（WU + 摄氏度） | 29 |
 | ✅ 已纳入 app（原「非 WU」三城：莫斯科/特拉维夫/伊斯坦布尔） | 3 |
+| ✅ 已纳入 app（六城见下节，ICAO 与 Polymarket 规则内 WU 链接一致） | 6 |
 | ⏸ 暂缓纳入（香港） | 1 |
 | ❌ 华氏度（美国等，未纳入） | 11 |
 | **原清单中「已核查」合计** | **44** |
-| **`cities.py` 当前城市数** | **32**（= 29 + 3） |
+| **`cities.py` 当前城市数** | **38**（= 29 + 3 + 6） |
 
 ---
 
+## 四、已纳入 `cities.py`：Polymarket 温度盘口与 WU 站（六城，2026-04 核对）
+
+各城「Rules」中给出的 **Wunderground history** 链接末尾四码，即下表 `icao`（`web_obs` / 折线图按该 ICAO 拉数）。
+
+| Slug / 城 | 规则中的站点/备注 | `icao` | WU 规则链接（示例日） |
+|-------------|-------------------|--------|------------------------|
+| `guangzhou` | 广州白云国际机场 | ZGGG | `…/cn/guangzhou/ZGGG` |
+| `lagos` | 拉各斯 Murtala Muhammad 国际机场 | DNMM | `…/ng/lagos/DNMM` |
+| `manila` | 马尼拉 Ninoy Aquino 国际机场 | RPLL | `…/ph/manila/RPLL` |
+| `karachi` | 规则文字有「Masroor Airbase」表述；**结算以链接为准** | **OPKC** | `…/pk/karachi/OPKC` |
+| `cape-town` | 开普敦国际机场（WU 路径区划为 matroosfontein） | FACT | `…/za/matroosfontein/FACT` |
+| `jeddah` | 吉达阿卜杜勒-阿齐兹国王机场 | OEJN | `…/sa/jeddah/OEJN` |
+
+事件页模式：`https://polymarket.com/event/highest-temperature-in-{slug}-on-{month}-{day}-{year}`（具体日期的规则与链接以该页 **Rules** 为准）。
+
 ---
 
-## 四、补充说明
+## 五、补充说明
 
-- **Panama City（巴拿马城）**：经核查确认使用 WU + 摄氏度，ICAO `MPMG`（Marcos A. Gelabert 国际机场），属于原「WU + 摄氏度」清单中的城市；当前 `cities.py` 在 29 座基础上另含莫斯科等 3 城，**共 32 座**（香港暂缓）。
+- **Panama City（巴拿马城）**：经核查确认使用 WU + 摄氏度，ICAO `MPMG`；当前 `cities.py` 在「29 + 莫斯科等 3 + 上表六城」**共 38 座**（香港暂缓）。
 
-*文件生成日期：2026-04-08 | 最后更新：2026-04-10（香港暂不纳入）*
+*文件生成日期：2026-04-08 | 最后更新：2026-04-27（新增六城与 Polymarket/WU 对照；香港仍暂不纳入）*
