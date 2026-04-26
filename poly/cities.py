@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 CITIES = [
     {"name": "Madrid",        "name_cn": "马德里",          "icao": "LEMD", "country": "ES", "slug": "madrid",        "timezone": "Europe/Madrid"},
     {"name": "London",        "name_cn": "伦敦",            "icao": "EGLC", "country": "GB", "slug": "london",        "timezone": "Europe/London"},
-    {"name": "Paris",         "name_cn": "巴黎",            "icao": "LFPG", "country": "FR", "slug": "paris",         "timezone": "Europe/Paris"},
+    {"name": "Paris",         "name_cn": "巴黎",            "icao": "LFPB", "country": "FR", "slug": "paris",         "timezone": "Europe/Paris"},
     {"name": "Munich",        "name_cn": "慕尼黑",          "icao": "EDDM", "country": "DE", "slug": "munich",        "timezone": "Europe/Berlin"},
     {"name": "Milan",         "name_cn": "米兰",            "icao": "LIMC", "country": "IT", "slug": "milan",         "timezone": "Europe/Rome"},
     {"name": "Warsaw",        "name_cn": "华沙",            "icao": "EPWA", "country": "PL", "slug": "warsaw",        "timezone": "Europe/Warsaw"},

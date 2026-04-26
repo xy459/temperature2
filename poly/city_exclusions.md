@@ -72,4 +72,14 @@
 
 - **Panama City（巴拿马城）**：经核查确认使用 WU + 摄氏度，ICAO `MPMG`；当前 `cities.py` 在「29 + 莫斯科等 3 + 上表六城」**共 38 座**（香港暂缓）。
 
-*文件生成日期：2026-04-08 | 最后更新：2026-04-27（新增六城与 Polymarket/WU 对照；香港仍暂不纳入）*
+### 2026-04-27：其余 32 城与 Polymarket Rules 主规则对照
+
+已排除上表六城（广州/拉各斯/马尼拉/卡拉奇/开普敦/吉达），对 `cities.py` 中其余城市在 **2026-04-27** 当日事件页（`highest-temperature-in-{slug}-on-april-27-2026`）人工对照：每条只认 **主规则**里「The resolution source … available here:」后的首条链接（WU 路径末四码或 NOAA `site=` 四码）。
+
+| 结论 | 说明 |
+|------|------|
+| 31 城一致 | 主规则链接四码与 `cities.py` 中 `icao` 相同 |
+| **巴黎** | Polymarket 为 **WU `…/LFPB`**（Paris-Le Bourget，Bonneuil-en-France），已把 `cities.py` 中巴黎从 LFPG 改为 **LFPB** |
+| 莫斯科 / 特拉维夫 / 伊斯坦布尔 | 主规则为 **NOAA** `weather.gov/wrh/timeseries?site=`，四码仍为 **UUWW / LLBG / LTFM**，与代码一致 |
+
+*文件生成日期：2026-04-08 | 最后更新：2026-04-27（六城 WU 对照 + 其余 32 城主规则核对；巴黎 LFPB；香港仍暂不纳入）*
