@@ -1,7 +1,7 @@
 # Polymarket 温度城市 — 不符合条件城市清单
 
 > 条件：数据源为 Weather Underground（WU）+ 摄氏度
-> 不满足任一条件的城市列于下表
+> 不满足任一条件的城市列于下表（**美国 K 字机场**现已在 `cities.py` 中用于本仓库 `web_obs` 折线图，见第二节：图表 **°F**，与 Polymarket「摄氏盘」无必然对应。）
 
 ---
 
@@ -19,9 +19,11 @@
 
 ---
 
-## 二、使用华氏度（Fahrenheit）的城市
+## 二、使用华氏度（Fahrenheit）的美国城市（已纳入 `cities.py` + `web_obs`）
 
-| 城市 | 数据源机构 | 数据源 URL | 温度单位 | ICAO/站点 |
+`fahrenheit: True`：`web_obs` 图轴、tooltip 为 **°F**；WU V1 用英制拉数后转**摄氏**入库，与其它渠道（NOAA/AVWX/WeatherAPI 为 METAR 摄氏）在 API 出图前再统一转为 **华氏**展示。
+
+| 城市 | 数据源机构 | 数据源 URL | 展示 / WU 口径 | ICAO/站点 |
 |---|---|---|---|---|
 | Denver（丹佛） | WU | https://www.wunderground.com/history/daily/us/denver/KDEN | 华氏度 | KDEN |
 | Chicago（芝加哥） | WU | https://www.wunderground.com/history/daily/us/chicago/KORD | 华氏度 | KORD |
@@ -35,6 +37,8 @@
 | Houston（休斯顿） | WU | https://www.wunderground.com/history/daily/us/houston/KHOU | 华氏度 | KHOU |
 | San Francisco（旧金山） | WU | https://www.wunderground.com/history/daily/us/san-francisco/KSFO | 华氏度 | KSFO |
 
+（上表 11 城即 `cities.py` 末尾美国条目；**Polymarket** 若存在同 slug 温度盘，以页面 Rules 为准。）
+
 ---
 
 ## 三、符合条件城市数量统计
@@ -45,9 +49,9 @@
 | ✅ 已纳入 app（原「非 WU」三城：莫斯科/特拉维夫/伊斯坦布尔） | 3 |
 | ✅ 已纳入 app（六城见下节，ICAO 与 Polymarket 规则内 WU 链接一致） | 6 |
 | ⏸ 暂缓纳入（香港） | 1 |
-| ❌ 华氏度（美国等，未纳入） | 11 |
-| **原清单中「已核查」合计** | **44** |
-| **`cities.py` 当前城市数** | **38**（= 29 + 3 + 6） |
+| ✅ 已纳入 app（**美国 11 城**，`fahrenheit`；`web_obs` 展示 **°F**，见上节） | 11 |
+| **原清单中「已核查」合计（未计美国 11 城旧口径）** | **44** |
+| **`cities.py` 当前城市数** | **49**（= 38 + 11 美国） |
 
 ---
 
@@ -70,7 +74,7 @@
 
 ## 五、补充说明
 
-- **Panama City（巴拿马城）**：经核查确认使用 WU + 摄氏度，ICAO `MPMG`；当前 `cities.py` 在「29 + 莫斯科等 3 + 上表六城」**共 38 座**（香港暂缓）。
+- **Panama City（巴拿马城）**：经核查确认使用 WU + 摄氏度，ICAO `MPMG`；当前 `cities.py` **共 49 城**（含美国 11；香港仍暂缓）。
 
 ### 2026-04-27：其余 32 城与 Polymarket Rules 主规则对照
 

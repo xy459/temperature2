@@ -75,20 +75,52 @@ def _channels_for_city(city: dict) -> list[str]:
 _NOAA_TEMP_RE = re.compile(r'\b(M?\d{1,2})/(M?\d{1,2})\b')
 
 
+def _rows_c_to_f_for_display(rows: list) -> list:
+    """库内为摄氏，折线图需华氏时转为 °F 展示。"""
+    if not rows:
+        return []
+    out = []
+    for r in rows:
+        t = r.get("temperature")
+        if t is None:
+            out.append({**r, "temperature": None})
+        else:
+            try:
+                tf = round(float(t) * 9.0 / 5.0 + 32.0, 2)
+            except (TypeError, ValueError):
+                tf = None
+            out.append({**r, "temperature": tf})
+    return out
+
+
+def _chart_series_for_display(city: dict, series: dict) -> dict:
+    if not city.get("fahrenheit"):
+        return series
+    return {ch: _rows_c_to_f_for_display(rows) for ch, rows in series.items()}
+
+
 # ── V1 API 拉取 ───────────────────────────────────────────────────────
 
-def _fetch_v1(icao: str, country: str, date_str: str):
+def _fetch_v1(city: dict, date_str: str):
     """
     调用 WU V1 历史 API，返回 (obs_list, error_msg)。
-    obs_list 每项：{"obs_time": "YYYY-MM-DD HH:MM:SS", "temperature": float|None}
+    obs_list 每项：{"obs_time": "YYYY-MM-DD HH:MM:SS", "temperature": float|None}，温度**统一为摄氏**再入库。
+    美国城市用 units=e（华氏）并在本函数内转为摄氏。
     """
-    url          = V1_BASE.format(icao=icao, country=country)
+    icao = city["icao"]
+    country = city["country"]
+    use_imperial = city.get("fahrenheit", False)
+    url = V1_BASE.format(icao=icao, country=country)
     date_compact = date_str.replace("-", "")
     try:
         resp = _SESSION.get(
             url,
-            params={"apiKey": WU_API_KEY, "units": "m",
-                    "startDate": date_compact, "endDate": date_compact},
+            params={
+                "apiKey": WU_API_KEY,
+                "units": "e" if use_imperial else "m",
+                "startDate": date_compact,
+                "endDate": date_compact,
+            },
             timeout=10,
         )
         resp.raise_for_status()
@@ -98,10 +130,15 @@ def _fetch_v1(icao: str, country: str, date_str: str):
 
     result = []
     for o in data.get("observations", []):
-        ts   = o.get("valid_time_gmt")
+        ts = o.get("valid_time_gmt")
         temp = o.get("temp")
         if ts is None:
             continue
+        if temp is not None and use_imperial:
+            try:
+                temp = round((float(temp) - 32.0) * 5.0 / 9.0, 2)
+            except (TypeError, ValueError):
+                temp = None
         obs_time = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         result.append({"obs_time": obs_time, "temperature": temp})
     return result, ""
@@ -111,7 +148,7 @@ def fetch_and_store(city: dict, date_str: str) -> tuple:
     """拉取指定城市指定日期的 WU METAR 并写库，返回 (新增条数, error_msg)。"""
     if not city.get("wu_v1", True):
         return 0, ""
-    obs_list, err = _fetch_v1(city["icao"], city["country"], date_str)
+    obs_list, err = _fetch_v1(city, date_str)
     if err:
         return 0, err
     inserted = db.insert_metar_observations(city["icao"], obs_list)
@@ -611,7 +648,7 @@ CHARTS_TEMPLATE = """
 </head>
 <body>
 
-<h1>🌡 城市温度折线图（多数据源）</h1>
+<h1>🌡 城市温度折线图（多数据源；美国城市为 °F）</h1>
 
 <div class="card">
   <div class="form-row">
@@ -637,9 +674,12 @@ function toFakeLocal(utcStr, tz) {
   return new Date(localStr.replace(' ', 'T'));
 }
 
-/* 根据温度值决定显示精度：有小数位则保留1位，否则显示整数 */
-function fmtTemp(v) {
+/* 根据温度值决定显示精度；美国城市为华氏度 */
+function fmtTemp(v, useF) {
   if (v === null || v === undefined) return '—';
+  if (useF) {
+    return (v % 1 !== 0) ? v.toFixed(1) + '°F' : Math.round(v) + '°F';
+  }
   return (v % 1 !== 0) ? v.toFixed(1) + '°C' : Math.round(v) + '°C';
 }
 
@@ -725,6 +765,7 @@ async function loadCharts() {
   const dayEnd   = new Date(date + 'T23:59:59').getTime();
 
   json.cities.forEach((city, idx) => {
+    const useF = !!city.fahrenheit;
     const card = document.createElement('div');
     card.className = 'chart-card';
 
@@ -755,6 +796,7 @@ async function loadCharts() {
 
     card.innerHTML =
       '<div class="chart-title">' + city.name_cn +
+      (useF ? ' <span style="font-size:0.72rem;color:#64748b;">°F</span>' : '') +
       '<span class="chart-subtitle">' + city.name + ' · ' + city.icao +
       ' <span style="color:#2563eb;font-size:0.68rem;">' + city.utc_offset + '</span>' +
       '<span class="chart-local-time" data-tz="' + city.timezone + '"></span></span></div>' +
@@ -794,7 +836,7 @@ async function loadCharts() {
                 const m  = String(dt.getMinutes()).padStart(2, '0');
                 return h + ':' + m + ' 本地';
               },
-              label: (item) => ' ' + item.dataset.label + ': ' + fmtTemp(item.parsed.y),
+              label: (item) => ' ' + item.dataset.label + ': ' + fmtTemp(item.parsed.y, useF),
             }
           }
         },
@@ -813,7 +855,7 @@ async function loadCharts() {
           },
           y: {
             ticks: {
-              callback: (v) => v + '°',
+              callback: (v) => (useF ? (v + '°F') : (v + '°C')),
               font: { size: 10 },
               color: '#999',
             },
@@ -877,6 +919,13 @@ def charts_data():
         )
 
         icao = city["icao"]
+        series = {
+            "noaa":       db.get_noaa_metar_by_utc_range(icao, utc_start, utc_end),
+            "wu_metar":   db.get_metar_by_utc_range(icao, utc_start, utc_end),
+            "weatherapi": db.get_multi_channel_by_utc_range(icao, "weatherapi", utc_start, utc_end),
+            "avwx":       db.get_multi_channel_by_utc_range(icao, "avwx", utc_start, utc_end),
+        }
+        series = _chart_series_for_display(city, series)
         result.append(
             (
                 offset_sec,
@@ -886,12 +935,8 @@ def charts_data():
                     "name_cn":    city["name_cn"],
                     "timezone":   city["timezone"],
                     "utc_offset": utc_offset,
-                    "series": {
-                        "noaa":       db.get_noaa_metar_by_utc_range(icao, utc_start, utc_end),
-                        "wu_metar":   db.get_metar_by_utc_range(icao, utc_start, utc_end),
-                        "weatherapi": db.get_multi_channel_by_utc_range(icao, "weatherapi", utc_start, utc_end),
-                        "avwx":       db.get_multi_channel_by_utc_range(icao, "avwx", utc_start, utc_end),
-                    },
+                    "fahrenheit": bool(city.get("fahrenheit")),
+                    "series":     series,
                 },
             )
         )
