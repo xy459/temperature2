@@ -6,7 +6,10 @@
 启动：先建库、立刻监听 HTTP:5050；随后在线程中全量拉取各渠道数据并启轮询（WU 对每城拉本地今+昨，避免与默认日期错位）。
 折线图默认日期=各城「本地今天」的最早一天；不再用单一日 UTC 作为默认值，减少美洲时区与 UTC 日期不一致时整图无数据。
 轮询：各渠道城市本地 11:00~17:00 活跃期自适应，其余时段降频。
-美国城：库内温度一律 **°F**；非美城为 **°C**（勿混用旧数据，美城历史若曾为 °C 请删表或等轮询重拉）。
+**温标（同一 `temperature` 列、按 `city["fahrenheit"]` 解释；不是全球统一摄氏）：**
+- **美城** `fahrenheit=True`：入库均为 **°F**——WU V1 用 `units=e` 直接存，**不**为对齐 METAR 而先转 °C 再存；NOAA / WeatherAPI / AVWX 先按各自得 **°C**（METAR/ API），再 `C→F` 后写入。
+- **非美城**：各渠道均按 **°C** 存。
+- 曾用旧逻辑对美城存过 **°C** 时，同列会混用单位，需 **删除该 ICAO 相关行** 或等轮询以新值覆盖后自行辨认；部署升级后建议清美城三表或接受短暂歧义期。
 """
 import logging
 import re
@@ -34,6 +37,8 @@ _CITY_MAP = {c["icao"]: c for c in CITIES}
 
 _SESSION = requests.Session()
 _SESSION.headers.update({"User-Agent": "PolyTempBot/1.0"})
+
+# 温标契约：见文件头 docstring；charts API 美城出图已直接读库内 °F，不再做换算。
 
 V1_BASE         = "https://api.weather.com/v1/location/{icao}:9:{country}/observations/historical.json"
 NOAA_BASE       = "https://aviationweather.gov/api/data/metar?ids={icao}&format=raw&taf=false"
@@ -235,7 +240,8 @@ def fetch_and_store_weatherapi(city: dict) -> tuple:
 # ── AVWX 拉取 ────────────────────────────────────────────────────────
 
 def fetch_and_store_avwx(city: dict) -> tuple:
-    """拉取 AVWX 最新 METAR 并写库，返回 (is_new: bool, error_msg: str)。"""
+    """拉取 AVWX 最新 METAR 并写库，返回 (is_new: bool, error_msg: str)。
+    报文/ JSON 为摄氏；美国 fahrenheit 城市存 **华氏**（与 `fetch_and_store_noaa` / `fetch_and_store_weatherapi` 一致）。"""
     icao = city["icao"]
     if not city.get("avwx", True):
         return False, ""
