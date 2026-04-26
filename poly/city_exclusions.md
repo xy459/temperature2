@@ -21,7 +21,7 @@
 
 ## 二、使用华氏度（Fahrenheit）的美国城市（已纳入 `cities.py` + `web_obs`）
 
-`fahrenheit: True`：`web_obs` 图轴、tooltip 为 **°F**；WU V1 用英制拉数后转**摄氏**入库，与其它渠道（NOAA/AVWX/WeatherAPI 为 METAR 摄氏）在 API 出图前再统一转为 **华氏**展示。
+`fahrenheit: True`：**数据库内温度均为 °F**（WU V1 英制原样；NOAA/AVWX/WeatherAPI 侧 METAR 与 API 解码为 **摄氏**后，入库前 `°C→°F`）。**ICAO 与 Polymarket 是否一致**：未在脚本中逐城核对；若交易美国温度盘，请打开该城 Polymarket 事件 **Rules** 中 WU 链接末四码自行确认。
 
 | 城市 | 数据源机构 | 数据源 URL | 展示 / WU 口径 | ICAO/站点 |
 |---|---|---|---|---|

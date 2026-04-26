@@ -3,7 +3,8 @@ from zoneinfo import ZoneInfo
 
 # web_obs 多渠道：WU 历史 METAR、NOAA、WeatherAPI、AVWX（各渠道按 ICAO）
 # 可选：wu_v1=False 关闭 WU V1；avwx=False 关闭 AVWX（如俄罗斯/白俄罗斯机场被 API 屏蔽）
-# fahrenheit=True：美国 WU 为英制，入库统一转摄氏，图表按华氏度显示
+# fahrenheit=True：美国城市 **SQLite 中温度存华氏度**（WU 直接存 °F；NOAA/METAR 报文为摄氏，入库前转 °F）；折线图同显 °F
+# Polymarket：美国 11 城 ICAO 未逐站与事件 Rules 核对，若上盘请以 polymarket.com 页面为准
 # Moscow / Tel Aviv / Istanbul：已纳入；香港（VHHH）暂不纳入
 # 2026-04 起：广州/拉各斯/马尼拉/卡拉奇/开普敦/吉达（ICAO 与 Polymarket 温度盘口规则内 Wunderground 链接一致，见 city_exclusions.md）
 CITIES = [

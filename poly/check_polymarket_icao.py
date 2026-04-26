@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""核对 Polymarket 温度盘口 Rules 与 cities.py 的 icao（支持 WU + NOAA 双源）。"""
+"""核对 Polymarket 温度盘口 Rules 与 cities.py 的 icao（支持 WU + NOAA 双源）。
+
+`fahrenheit` 美国城不在此脚本核对：多数无对应摄氏 Polymarket 事件或需单独开事件页手检 ICAO。
+"""
 import re
 import sys
 import time

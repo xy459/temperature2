@@ -6,6 +6,7 @@
 启动：先建库、立刻监听 HTTP:5050；随后在线程中全量拉取各渠道数据并启轮询（WU 对每城拉本地今+昨，避免与默认日期错位）。
 折线图默认日期=各城「本地今天」的最早一天；不再用单一日 UTC 作为默认值，减少美洲时区与 UTC 日期不一致时整图无数据。
 轮询：各渠道城市本地 11:00~17:00 活跃期自适应，其余时段降频。
+美国城：库内温度一律 **°F**；非美城为 **°C**（勿混用旧数据，美城历史若曾为 °C 请删表或等轮询重拉）。
 """
 import logging
 import re
@@ -75,37 +76,13 @@ def _channels_for_city(city: dict) -> list[str]:
 _NOAA_TEMP_RE = re.compile(r'\b(M?\d{1,2})/(M?\d{1,2})\b')
 
 
-def _rows_c_to_f_for_display(rows: list) -> list:
-    """库内为摄氏，折线图需华氏时转为 °F 展示。"""
-    if not rows:
-        return []
-    out = []
-    for r in rows:
-        t = r.get("temperature")
-        if t is None:
-            out.append({**r, "temperature": None})
-        else:
-            try:
-                tf = round(float(t) * 9.0 / 5.0 + 32.0, 2)
-            except (TypeError, ValueError):
-                tf = None
-            out.append({**r, "temperature": tf})
-    return out
-
-
-def _chart_series_for_display(city: dict, series: dict) -> dict:
-    if not city.get("fahrenheit"):
-        return series
-    return {ch: _rows_c_to_f_for_display(rows) for ch, rows in series.items()}
-
-
 # ── V1 API 拉取 ───────────────────────────────────────────────────────
 
 def _fetch_v1(city: dict, date_str: str):
     """
     调用 WU V1 历史 API，返回 (obs_list, error_msg)。
-    obs_list 每项：{"obs_time": "YYYY-MM-DD HH:MM:SS", "temperature": float|None}，温度**统一为摄氏**再入库。
-    美国城市用 units=e（华氏）并在本函数内转为摄氏。
+    obs_list 每项：{"obs_time": "YYYY-MM-DD HH:MM:SS", "temperature": float|None}。
+    摄氏城市：units=m，库内存 °C。美国 fahrenheit 城：units=e，库内存 **°F**（与 WU 一致）。
     """
     icao = city["icao"]
     country = city["country"]
@@ -136,7 +113,7 @@ def _fetch_v1(city: dict, date_str: str):
             continue
         if temp is not None and use_imperial:
             try:
-                temp = round((float(temp) - 32.0) * 5.0 / 9.0, 2)
+                temp = round(float(temp), 2)
             except (TypeError, ValueError):
                 temp = None
         obs_time = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -189,8 +166,16 @@ def _parse_noaa_obs_time(raw: str) -> str | None:
         return None
 
 
-def fetch_and_store_noaa(icao: str) -> tuple:
-    """拉取 NOAA 最新 METAR 并写库，返回 (is_new: bool, error_msg: str)。"""
+def _c_to_f(temp_c: float | None) -> float | None:
+    if temp_c is None:
+        return None
+    return round(float(temp_c) * 9.0 / 5.0 + 32.0, 2)
+
+
+def fetch_and_store_noaa(city: dict) -> tuple:
+    """拉取 NOAA 最新 METAR 并写库，返回 (is_new: bool, error_msg: str)。
+    METAR 报文温度均为 **摄氏**（ICAO）；美国 fahrenheit 城市入库前转为 **华氏**。"""
+    icao = city["icao"]
     url = NOAA_BASE.format(icao=icao)
     try:
         resp = _SESSION.get(url, timeout=10)
@@ -210,14 +195,17 @@ def fetch_and_store_noaa(icao: str) -> tuple:
     if not obs_time:
         return False, f"cannot parse time: {raw}"
 
-    inserted = db.insert_noaa_metar(icao, obs_time, temp)
+    store_temp = _c_to_f(temp) if city.get("fahrenheit") and temp is not None else temp
+    inserted = db.insert_noaa_metar(icao, obs_time, store_temp)
     return inserted, ""
 
 
 # ── WeatherAPI 拉取 ───────────────────────────────────────────────────
 
-def fetch_and_store_weatherapi(icao: str) -> tuple:
-    """拉取 WeatherAPI 最新观测并写库，返回 (is_new: bool, error_msg: str)。"""
+def fetch_and_store_weatherapi(city: dict) -> tuple:
+    """拉取 WeatherAPI 最新观测并写库，返回 (is_new: bool, error_msg: str)。
+    API 返回摄氏；美国 fahrenheit 城市存 **华氏**。"""
+    icao = city["icao"]
     if not WEATHERAPI_KEY:
         return False, "WEATHERAPI_KEY 未配置"
     try:
@@ -239,7 +227,8 @@ def fetch_and_store_weatherapi(icao: str) -> tuple:
         return False, "无有效数据"
 
     obs_time = datetime.fromtimestamp(last_epoch, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    inserted = db.insert_multi_channel_obs(icao, "weatherapi", obs_time, temp_c)
+    store_temp = _c_to_f(temp_c) if city.get("fahrenheit") else temp_c
+    inserted = db.insert_multi_channel_obs(icao, "weatherapi", obs_time, store_temp)
     return inserted, ""
 
 
@@ -278,7 +267,8 @@ def fetch_and_store_avwx(city: dict) -> tuple:
     except Exception:
         return False, f"时间解析失败: {time_dt}"
 
-    inserted = db.insert_multi_channel_obs(icao, "avwx", obs_time, temp_c)
+    store_temp = _c_to_f(temp_c) if city.get("fahrenheit") else temp_c
+    inserted = db.insert_multi_channel_obs(icao, "avwx", obs_time, store_temp)
     return inserted, ""
 
 
@@ -310,7 +300,7 @@ def init_noaa_metar_all():
     """程序启动时，为所有城市拉取最新 NOAA METAR 并写库。"""
     logger.info("[noaa] 启动初始化，共 %d 个城市", len(CITIES))
     for city in CITIES:
-        is_new, err = fetch_and_store_noaa(city["icao"])
+        is_new, err = fetch_and_store_noaa(city)
         if err:
             logger.error("[noaa] 初始化失败 %s (%s): %s", city["name"], city["icao"], err)
         else:
@@ -326,7 +316,7 @@ def init_weatherapi_all():
         return
     logger.info("[weatherapi] 启动初始化，共 %d 个城市", len(CITIES))
     for city in CITIES:
-        is_new, err = fetch_and_store_weatherapi(city["icao"])
+        is_new, err = fetch_and_store_weatherapi(city)
         if err:
             logger.error("[weatherapi] 初始化失败 %s (%s): %s", city["name"], city["icao"], err)
         else:
@@ -456,11 +446,11 @@ def _do_poll(city: dict, channel: str, today: str) -> tuple:
         inserted, err = fetch_and_store(city, today)
         return inserted > 0, err
     if channel == "noaa":
-        return fetch_and_store_noaa(icao)
+        return fetch_and_store_noaa(city)
     if channel == "weatherapi":
         if not WEATHERAPI_KEY:
             return False, ""
-        return fetch_and_store_weatherapi(icao)
+        return fetch_and_store_weatherapi(city)
     if channel == "avwx":
         if not AVWX_TOKEN:
             return False, ""
@@ -925,7 +915,6 @@ def charts_data():
             "weatherapi": db.get_multi_channel_by_utc_range(icao, "weatherapi", utc_start, utc_end),
             "avwx":       db.get_multi_channel_by_utc_range(icao, "avwx", utc_start, utc_end),
         }
-        series = _chart_series_for_display(city, series)
         result.append(
             (
                 offset_sec,
