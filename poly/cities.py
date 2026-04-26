@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 # web_obs 多渠道：WU 历史 METAR、NOAA、WeatherAPI、AVWX（各渠道按 ICAO）
 # 可选：wu_v1=False 关闭 WU V1；avwx=False 关闭 AVWX（如俄罗斯/白俄罗斯机场被 API 屏蔽）
 # fahrenheit=True：美国城市 **SQLite 中温度存华氏度**（WU 直接存 °F；NOAA/METAR 报文为摄氏，入库前转 °F）；折线图同显 °F
-# Polymarket：美国 11 城 ICAO 未逐站与事件 Rules 核对，若上盘请以 polymarket.com 页面为准
+# Polymarket：美国城 ICAO 与 `city_exclusions.md` 第六节对拍（以事件页主规则 WU 末四码为准；换日请重查）
 # Moscow / Tel Aviv / Istanbul：已纳入；香港（VHHH）暂不纳入
 # 2026-04 起：广州/拉各斯/马尼拉/卡拉奇/开普敦/吉达（ICAO 与 Polymarket 温度盘口规则内 Wunderground 链接一致，见 city_exclusions.md）
 CITIES = [
@@ -46,11 +46,11 @@ CITIES = [
     {"name": "Tel Aviv",      "name_cn": "特拉维夫",        "icao": "LLBG", "country": "IL", "slug": "tel-aviv",      "timezone": "Asia/Jerusalem"},
     {"name": "Jeddah",        "name_cn": "吉达",            "icao": "OEJN", "country": "SA", "slug": "jeddah",        "timezone": "Asia/Riyadh"},
     {"name": "Istanbul",      "name_cn": "伊斯坦布尔",      "icao": "LTFM", "country": "TR", "slug": "istanbul",      "timezone": "Europe/Istanbul", "wu_v1": False},
-    # 美国（fahrenheit：WU 用英制拉数→库内存摄氏，web_obs 展示 °F；Polymarket 温度盘口径见 city_exclusions.md）
-    {"name": "Denver",         "name_cn": "丹佛",            "icao": "KDEN", "country": "US", "slug": "denver",         "timezone": "America/Denver",    "fahrenheit": True},
+    # 美国 fahrenheit，库内 °F；见 city_exclusions.md
+    {"name": "Denver",         "name_cn": "丹佛",            "icao": "KBKF", "country": "US", "slug": "denver",         "timezone": "America/Denver",    "fahrenheit": True},
     {"name": "Chicago",        "name_cn": "芝加哥",          "icao": "KORD", "country": "US", "slug": "chicago",        "timezone": "America/Chicago",  "fahrenheit": True},
     {"name": "New York City",  "name_cn": "纽约",            "icao": "KJFK", "country": "US", "slug": "new-york-city", "timezone": "America/New_York", "fahrenheit": True},
-    {"name": "Dallas",         "name_cn": "达拉斯",          "icao": "KDFW", "country": "US", "slug": "dallas",         "timezone": "America/Chicago",  "fahrenheit": True},
+    {"name": "Dallas",         "name_cn": "达拉斯",          "icao": "KDAL", "country": "US", "slug": "dallas",         "timezone": "America/Chicago",  "fahrenheit": True},
     {"name": "Austin",         "name_cn": "奥斯汀",          "icao": "KAUS", "country": "US", "slug": "austin",         "timezone": "America/Chicago",  "fahrenheit": True},
     {"name": "Los Angeles",    "name_cn": "洛杉矶",          "icao": "KLAX", "country": "US", "slug": "los-angeles",    "timezone": "America/Los_Angeles", "fahrenheit": True},
     {"name": "Miami",          "name_cn": "迈阿密",          "icao": "KMIA", "country": "US", "slug": "miami",          "timezone": "America/New_York", "fahrenheit": True},

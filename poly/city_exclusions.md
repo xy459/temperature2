@@ -21,23 +21,11 @@
 
 ## 二、使用华氏度（Fahrenheit）的美国城市（已纳入 `cities.py` + `web_obs`）
 
-`fahrenheit: True`：**数据库内温度均为 °F**（WU V1 英制原样；NOAA/AVWX/WeatherAPI 侧 METAR 与 API 解码为 **摄氏**后，入库前 `°C→°F`）。**ICAO 与 Polymarket 是否一致**：未在脚本中逐城核对；若交易美国温度盘，请打开该城 Polymarket 事件 **Rules** 中 WU 链接末四码自行确认。
+`fahrenheit: True`：**数据库内温度均为 °F**（WU V1 英制原样；NOAA/AVWX/WeatherAPI 侧为 METAR/摄氏，入库前 `°C→°F`）。**与 Polymarket 的 ICAO 对拍**见 **第六节**（与第四节六城、第五节相同方式：打开事件 **Rules**，只认主规则里「The resolution source … available here:」的**首条** WU 链接末四码；**不使用**已删除的自动脚本）。
 
-| 城市 | 数据源机构 | 数据源 URL | 展示 / WU 口径 | ICAO/站点 |
-|---|---|---|---|---|
-| Denver（丹佛） | WU | https://www.wunderground.com/history/daily/us/denver/KDEN | 华氏度 | KDEN |
-| Chicago（芝加哥） | WU | https://www.wunderground.com/history/daily/us/chicago/KORD | 华氏度 | KORD |
-| New York City（纽约） | WU | https://www.wunderground.com/history/daily/us/new-york-city/KJFK | 华氏度 | KJFK |
-| Dallas（达拉斯） | WU | https://www.wunderground.com/history/daily/us/dallas/KDFW | 华氏度 | KDFW |
-| Austin（奥斯汀） | WU | https://www.wunderground.com/history/daily/us/austin/KAUS | 华氏度 | KAUS |
-| Los Angeles（洛杉矶） | WU | https://www.wunderground.com/history/daily/us/los-angeles/KLAX | 华氏度 | KLAX |
-| Miami（迈阿密） | WU | https://www.wunderground.com/history/daily/us/miami/KMIA | 华氏度 | KMIA |
-| Atlanta（亚特兰大） | WU | https://www.wunderground.com/history/daily/us/atlanta/KATL | 华氏度 | KATL |
-| Seattle（西雅图） | WU | https://www.wunderground.com/history/daily/us/seattle/KSEA | 华氏度 | KSEA |
-| Houston（休斯顿） | WU | https://www.wunderground.com/history/daily/us/houston/KHOU | 华氏度 | KHOU |
-| San Francisco（旧金山） | WU | https://www.wunderground.com/history/daily/us/san-francisco/KSFO | 华氏度 | KSFO |
-
-（上表 11 城即 `cities.py` 末尾美国条目；**Polymarket** 若存在同 slug 温度盘，以页面 Rules 为准。）
+| 城市 | 说明 |
+|---|---|
+| 共 11 城 | 详见 **第六节** 表（含 2026-04-27 对拍结果与与 `cities.py` 是否一致） |
 
 ---
 
@@ -86,4 +74,26 @@
 | **巴黎** | Polymarket 为 **WU `…/LFPB`**（Paris-Le Bourget，Bonneuil-en-France），已把 `cities.py` 中巴黎从 LFPG 改为 **LFPB** |
 | 莫斯科 / 特拉维夫 / 伊斯坦布尔 | 主规则为 **NOAA** `weather.gov/wrh/timeseries?site=`，四码仍为 **UUWW / LLBG / LTFM**，与代码一致 |
 
-*文件生成日期：2026-04-08 | 最后更新：2026-04-27（六城 WU 对照 + 其余 32 城主规则核对；巴黎 LFPB；香港仍暂不纳入）*
+---
+
+## 六、美国 11 城与 Polymarket（**2026-04-27** 事件页，与第四节**同一核对方式**）
+
+人读各城事件 **Rules** 主文，只认「The resolution source … available here:」后**第一条** Wunderground 链接，路径**末四码** = 结算用 ICAO。已**删除**易误判的 `check_polymarket_icao.py`，不再用脚本批量扫页。
+
+| 城市 | Polymarket 事件 | 规则中站点 / 说明 | WU 末四码 | `cities.py` icao | 对拍结果 |
+|------|-----------------|-------------------|-----------|-----------------|---------|
+| 丹佛 | [highest-temperature-in-denver…](https://polymarket.com/event/highest-temperature-in-denver-on-april-27-2026) | Buckley Space Force Base（Aurora） | **KBKF** | KBKF | 已按 PM 自 KDEN 更正 |
+| 芝加哥 | […chicago…](https://polymarket.com/event/highest-temperature-in-chicago-on-april-27-2026) | Chicago O’Hare Intl Airport | KORD | KORD | 一致 |
+| 纽约 | […new-york-city…](https://polymarket.com/event/highest-temperature-in-new-york-city-on-april-27-2026) | **该日 404 无此事件** | — | KJFK | **未对拍**（有市后再读 Rules 改 icao） |
+| 达拉斯 | […dallas…](https://polymarket.com/event/highest-temperature-in-dallas-on-april-27-2026) | Dallas **Love Field** | **KDAL** | KDAL | 已按 PM 自 KDFW 更正 |
+| 奥斯汀 | […austin…](https://polymarket.com/event/highest-temperature-in-austin-on-april-27-2026) | Austin-Bergstrom International | KAUS | KAUS | 一致 |
+| 洛杉矶 | […los-angeles…](https://polymarket.com/event/highest-temperature-in-los-angeles-on-april-27-2026) | Los Angeles International | KLAX | KLAX | 一致 |
+| 迈阿密 | […miami…](https://polymarket.com/event/highest-temperature-in-miami-on-april-27-2026) | Miami International | KMIA | KMIA | 一致 |
+| 亚特兰大 | […atlanta…](https://polymarket.com/event/highest-temperature-in-atlanta-on-april-27-2026) | Hartsfield-Jackson International | KATL | KATL | 一致 |
+| 西雅图 | […seattle…](https://polymarket.com/event/highest-temperature-in-seattle-on-april-27-2026) | Seattle-Tacoma International（WU 区划名 seatac） | KSEA | KSEA | 一致 |
+| 休斯顿 | […houston…](https://polymarket.com/event/highest-temperature-in-houston-on-april-27-2026) | William P. Hobby Airport | KHOU | KHOU | 一致 |
+| 旧金山 | […san-francisco…](https://polymarket.com/event/highest-temperature-in-san-francisco-on-april-27-2026) | San Francisco International | KSFO | KSFO | 一致 |
+
+> 换日开盘时须重新打开**对应日期**事件页；纽约等城市若无事件则为「无页可对」。
+
+*文件生成日期：2026-04-08 | 最后更新：美国城第六节手工对拍、丹佛→KBKF/达拉斯→KDAL/纽约待核；已移除自动核对脚本；香港仍暂不纳入）*
