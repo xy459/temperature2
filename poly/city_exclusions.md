@@ -7,7 +7,7 @@
 
 ## 一、数据源非 WU（部分已纳入 `poly/cities.py`）
 
-以下 **3 城**已加入折线图 / Obs 工具（ICAO：**UUWW / LLBG / LTFM**）。多渠道校验（2026-04）：**NOAA METAR**、**IEM ASOS** 对上述三站均可返回温度序列；**WU / AVWX / WeatherAPI** 与既有城市相同（需在部署环境有 API Key 后自行 spot-check）。
+以下 **3 城**已加入折线图 / Obs 工具（ICAO：**UUWW / LLBG / LTFM**）。多渠道校验（2026-04）：**NOAA METAR** 等对上述三站可返回温度序列；**WU / AVWX / WeatherAPI** 与既有城市相同（需在部署环境有 API Key 后自行 spot-check）。
 
 | 城市 | 参考（官方/可视化） | ICAO |
 |---|---|---|

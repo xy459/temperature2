@@ -3,8 +3,8 @@
 运行：python web_obs.py
 访问：http://localhost:5050 与 http://localhost:5050/charts（根路径重定向到 /charts）
 
-启动：先建库、立刻监听 HTTP:5050；随后在线程中全量拉取各渠道数据并启轮询。
-启动后短暂时间内图表可能无数据，待后台拉数完成后刷新即可。
+启动：先建库、立刻监听 HTTP:5050；随后在线程中全量拉取各渠道数据并启轮询（WU 对每城拉本地今+昨，避免与默认日期错位）。
+折线图默认日期=各城「本地今天」的最早一天；不再用单一日 UTC 作为默认值，减少美洲时区与 UTC 日期不一致时整图无数据。
 轮询：各渠道城市本地 11:00~17:00 活跃期自适应，其余时段降频。
 """
 import logging
@@ -36,11 +36,6 @@ _SESSION.headers.update({"User-Agent": "PolyTempBot/1.0"})
 
 V1_BASE         = "https://api.weather.com/v1/location/{icao}:9:{country}/observations/historical.json"
 NOAA_BASE       = "https://aviationweather.gov/api/data/metar?ids={icao}&format=raw&taf=false"
-IEM_BASE        = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py"
-# IEM 对短时间大量请求会 429；启动时多城连发易触发，需限速 + 遇 429 固定等待后重试
-IEM_MAX_RETRIES       = 3
-IEM_STARTUP_GAP_SEC   = 1.0
-IEM_429_RETRY_WAIT_S  = 5.0
 WEATHERAPI_BASE = "http://api.weatherapi.com/v1/current.json"
 AVWX_BASE       = "https://avwx.rest/api/metar/{icao}"
 
@@ -60,7 +55,6 @@ POLL_TICK           = 10           # 主循环最小唤醒间隔（秒）
 _CHANNEL_CYCLE: dict[str, int] = {
     "wu_metar":   30 * 60,
     "noaa":       30 * 60,
-    "iem":        30 * 60,
     "avwx":       30 * 60,
     "weatherapi": 15 * 60,
 }
@@ -183,95 +177,6 @@ def fetch_and_store_noaa(icao: str) -> tuple:
     return inserted, ""
 
 
-# ── IEM ASOS 拉取 ─────────────────────────────────────────────────────
-
-def _fetch_iem(icao: str, date_str: str):
-    """
-    拉取 IEM ASOS CSV（含 METAR + SPECI），返回 (obs_list, error_msg)。
-    obs_list 每项：{"obs_time": "YYYY-MM-DD HH:MM:SS", "temperature": float}
-    遇 HTTP 429：等待 IEM_429_RETRY_WAIT_S 秒后再请求，单站最多尝试 IEM_MAX_RETRIES 次。
-    """
-    year, month, day = int(date_str[:4]), int(date_str[5:7]), int(date_str[8:10])
-    params = {
-        "station": icao,
-        "data": "tmpf",
-        "tz": "Etc/UTC",
-        "format": "onlycomma",
-        "latlon": "no",
-        "missing": "M",
-        "direct": "no",
-        "report_type": ["3", "4"],
-        "year1": year, "month1": month, "day1": day,
-        "year2": year, "month2": month, "day2": day,
-    }
-
-    lines: list[str] = []
-    for attempt in range(IEM_MAX_RETRIES):
-        try:
-            resp = _SESSION.get(IEM_BASE, params=params, timeout=15)
-        except Exception as e:
-            return [], str(e)
-
-        if resp.status_code == 429:
-            if attempt + 1 >= IEM_MAX_RETRIES:
-                return [], f"429 Too Many Requests (已尝试 {IEM_MAX_RETRIES} 次): {IEM_BASE}"
-            wait = IEM_429_RETRY_WAIT_S
-            logger.warning(
-                "[iem] %s 限流 429，%.1f 秒后再请求 (%d/%d)",
-                icao, wait, attempt + 1, IEM_MAX_RETRIES,
-            )
-            time.sleep(wait)
-            continue
-
-        try:
-            resp.raise_for_status()
-        except Exception as e:
-            return [], str(e)
-
-        lines = resp.text.strip().split("\n")
-        break
-
-    if len(lines) < 2:
-        return [], ""
-
-    header = [h.strip() for h in lines[0].split(",")]
-    col = {h: i for i, h in enumerate(header)}
-
-    result = []
-    for line in lines[1:]:
-        parts = line.split(",")
-        if len(parts) < len(header):
-            continue
-        valid_str = parts[col.get("valid", 1)].strip()
-        tmpf_str  = parts[col.get("tmpf", -1)].strip() if "tmpf" in col else "M"
-
-        if tmpf_str == "M" or not tmpf_str:
-            continue
-        try:
-            temp_c = round((float(tmpf_str) - 32) * 5 / 9, 1)
-        except ValueError:
-            continue
-
-        try:
-            dt = datetime.strptime(valid_str, "%Y-%m-%d %H:%M")
-            obs_time = dt.strftime("%Y-%m-%d %H:%M:%S")
-        except ValueError:
-            continue
-
-        result.append({"obs_time": obs_time, "temperature": temp_c})
-
-    return result, ""
-
-
-def fetch_and_store_iem(city: dict, date_str: str) -> tuple:
-    """拉取 IEM ASOS 数据并写库，返回 (新增条数, error_msg)。"""
-    obs_list, err = _fetch_iem(city["icao"], date_str)
-    if err:
-        return 0, err
-    inserted = db.insert_multi_channel_obs_batch(city["icao"], "iem", obs_list)
-    return inserted, ""
-
-
 # ── WeatherAPI 拉取 ───────────────────────────────────────────────────
 
 def fetch_and_store_weatherapi(icao: str) -> tuple:
@@ -343,18 +248,24 @@ def fetch_and_store_avwx(city: dict) -> tuple:
 # ── 启动全量初始化 ────────────────────────────────────────────────────
 
 def init_metar_all():
-    """程序启动时，为所有城市拉取当天 WU METAR 并写库。"""
-    logger.info("[metar] 启动全量初始化，共 %d 个城市", len(CITIES))
+    """程序启动时，为所有城市各拉取「本地今、昨」两日的 WU METAR 并写库。"""
+    logger.info("[metar] 启动全量初始化（每城本地今+昨），共 %d 个城市", len(CITIES))
     total_new = 0
     for city in CITIES:
-        today = _city_local_date(city)
-        inserted, err = fetch_and_store(city, today)
-        if err:
-            logger.error("[metar] 初始化失败 %s (%s): %s", city["name"], city["icao"], err)
-        else:
-            total_new += inserted
-            logger.info("[metar] %s (%s) %s → +%d 条",
-                        city["name"], city["icao"], today, inserted)
+        for d in (0, 1):
+            ds = _city_local_date_minus(city, d)
+            inserted, err = fetch_and_store(city, ds)
+            if err:
+                logger.error(
+                    "[metar] 初始化失败 %s (%s) %s: %s",
+                    city["name"], city["icao"], ds, err,
+                )
+            else:
+                total_new += inserted
+                logger.info(
+                    "[metar] %s (%s) %s → +%d 条",
+                    city["name"], city["icao"], ds, inserted,
+                )
     logger.info("[metar] 初始化完成，共新增 %d 条", total_new)
 
 
@@ -369,24 +280,6 @@ def init_noaa_metar_all():
             logger.info("[noaa] %s (%s) → %s", city["name"], city["icao"],
                         "新数据" if is_new else "已存在")
     logger.info("[noaa] 初始化完成")
-
-
-def init_iem_all():
-    """程序启动时，为所有城市拉取当天 IEM ASOS 全量并写库。"""
-    logger.info("[iem] 启动全量初始化，共 %d 个城市", len(CITIES))
-    total_new = 0
-    for i, city in enumerate(CITIES):
-        if i:
-            time.sleep(IEM_STARTUP_GAP_SEC)
-        today = _city_local_date(city)
-        inserted, err = fetch_and_store_iem(city, today)
-        if err:
-            logger.error("[iem] 初始化失败 %s (%s): %s", city["name"], city["icao"], err)
-        else:
-            total_new += inserted
-            logger.info("[iem] %s (%s) %s → +%d 条",
-                        city["name"], city["icao"], today, inserted)
-    logger.info("[iem] 初始化完成，共新增 %d 条", total_new)
 
 
 def init_weatherapi_all():
@@ -427,6 +320,20 @@ def init_avwx_all():
 
 def _city_local_date(city: dict) -> str:
     return datetime.now(ZoneInfo(city["timezone"])).strftime("%Y-%m-%d")
+
+
+def _city_local_date_minus(city: dict, day_offset: int) -> str:
+    d = datetime.now(ZoneInfo(city["timezone"])).date() - timedelta(days=day_offset)
+    return d.isoformat()
+
+
+def _default_charts_date() -> str:
+    """与日期选择器联动：各城「查询日」是各自本地日历上的同一天；默认用 CITIES 中「本地今天」的最早一天。
+    这样 UTC 已跨日、美洲仍为「昨天」时，不会默认到美洲尚未有入库的「本地今天」而整图空数据。"""
+    dmin = min(
+        datetime.now(ZoneInfo(c["timezone"])).date() for c in CITIES
+    )
+    return dmin.isoformat()
 
 
 # ── 轮询状态机 ───────────────────────────────────────────────────────
@@ -513,9 +420,6 @@ def _do_poll(city: dict, channel: str, today: str) -> tuple:
         return inserted > 0, err
     if channel == "noaa":
         return fetch_and_store_noaa(icao)
-    if channel == "iem":
-        inserted, err = fetch_and_store_iem(city, today)
-        return inserted > 0, err
     if channel == "weatherapi":
         if not WEATHERAPI_KEY:
             return False, ""
@@ -712,7 +616,7 @@ CHARTS_TEMPLATE = """
 <div class="card">
   <div class="form-row">
     <div>
-      <label>日期（各城市本地日期）</label>
+      <label>日期（每城各自本地日历上的一天；未指定时默认取各城「本地今天」的最早日）</label>
       <input type="date" id="date-picker" value="{{ selected_date }}">
     </div>
     <div><button onclick="loadCharts()">查询</button></div>
@@ -783,7 +687,6 @@ function startChartLocalTimeTicker() {
 const SERIES_CONFIG = [
   { key: 'noaa',       label: 'NOAA METAR', color: '#2563eb', width: 1.8, radius: 2.5 },
   { key: 'wu_metar',   label: 'WU METAR',   color: '#ea580c', width: 1.5, radius: 2   },
-  { key: 'iem',        label: 'IEM',        color: '#16a34a', width: 1.5, radius: 2   },
   { key: 'weatherapi', label: 'WeatherAPI', color: '#9333ea', width: 1.5, radius: 2   },
   { key: 'avwx',       label: 'AVWX',       color: '#0891b2', width: 1.5, radius: 2   },
 ];
@@ -937,15 +840,13 @@ document.addEventListener('DOMContentLoaded', loadCharts);
 
 @app.route("/charts")
 def charts():
-    today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    selected_date = request.args.get("date", today_utc)
+    selected_date = request.args.get("date", _default_charts_date())
     return render_template_string(CHARTS_TEMPLATE, selected_date=selected_date)
 
 
 @app.route("/api/charts_data")
 def charts_data():
-    today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    date_str = request.args.get("date", today_utc)
+    date_str = request.args.get("date", _default_charts_date())
 
     try:
         year  = int(date_str[0:4])
@@ -988,7 +889,6 @@ def charts_data():
                     "series": {
                         "noaa":       db.get_noaa_metar_by_utc_range(icao, utc_start, utc_end),
                         "wu_metar":   db.get_metar_by_utc_range(icao, utc_start, utc_end),
-                        "iem":        db.get_multi_channel_by_utc_range(icao, "iem", utc_start, utc_end),
                         "weatherapi": db.get_multi_channel_by_utc_range(icao, "weatherapi", utc_start, utc_end),
                         "avwx":       db.get_multi_channel_by_utc_range(icao, "avwx", utc_start, utc_end),
                     },
@@ -1015,7 +915,6 @@ def _background_data_bootstrap() -> None:
     try:
         init_metar_all()
         init_noaa_metar_all()
-        init_iem_all()
         init_weatherapi_all()
         init_avwx_all()
     except Exception:

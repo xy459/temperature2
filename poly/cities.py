@@ -1,7 +1,7 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-# 摄氏度城市；web_obs 多渠道：WU 历史 METAR、NOAA、IEM、WeatherAPI、AVWX（各渠道按 ICAO）
+# 摄氏度城市；web_obs 多渠道：WU 历史 METAR、NOAA、WeatherAPI、AVWX（各渠道按 ICAO）
 # 可选：wu_v1=False 关闭 WU V1；avwx=False 关闭 AVWX（如俄罗斯/白俄罗斯机场被 API 屏蔽）
 # Moscow / Tel Aviv / Istanbul：已纳入；香港（VHHH）暂不纳入
 # 排除：所有美国城市（WU 华氏度）
