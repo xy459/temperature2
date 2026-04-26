@@ -84,7 +84,7 @@
 |------|-----------------|-------------------|-----------|-----------------|---------|
 | 丹佛 | [highest-temperature-in-denver…](https://polymarket.com/event/highest-temperature-in-denver-on-april-27-2026) | Buckley Space Force Base（Aurora） | **KBKF** | KBKF | 已按 PM 自 KDEN 更正 |
 | 芝加哥 | […chicago…](https://polymarket.com/event/highest-temperature-in-chicago-on-april-27-2026) | Chicago O’Hare Intl Airport | KORD | KORD | 一致 |
-| 纽约 | […new-york-city…](https://polymarket.com/event/highest-temperature-in-new-york-city-on-april-27-2026) | **该日 404 无此事件** | — | KJFK | **未对拍**（有市后再读 Rules 改 icao） |
+| 纽约 | […new-york-city…](https://polymarket.com/event/highest-temperature-in-new-york-city-on-april-27-2026) | **该日 404 无此事件**（Rules 未手开）；按用户指定 **LaGuardia** | **KLGA** | KLGA | 与 `cities.py` 一致 |
 | 达拉斯 | […dallas…](https://polymarket.com/event/highest-temperature-in-dallas-on-april-27-2026) | Dallas **Love Field** | **KDAL** | KDAL | 已按 PM 自 KDFW 更正 |
 | 奥斯汀 | […austin…](https://polymarket.com/event/highest-temperature-in-austin-on-april-27-2026) | Austin-Bergstrom International | KAUS | KAUS | 一致 |
 | 洛杉矶 | […los-angeles…](https://polymarket.com/event/highest-temperature-in-los-angeles-on-april-27-2026) | Los Angeles International | KLAX | KLAX | 一致 |

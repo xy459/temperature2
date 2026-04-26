@@ -49,7 +49,7 @@ CITIES = [
     # 美国 fahrenheit，库内 °F；见 city_exclusions.md
     {"name": "Denver",         "name_cn": "丹佛",            "icao": "KBKF", "country": "US", "slug": "denver",         "timezone": "America/Denver",    "fahrenheit": True},
     {"name": "Chicago",        "name_cn": "芝加哥",          "icao": "KORD", "country": "US", "slug": "chicago",        "timezone": "America/Chicago",  "fahrenheit": True},
-    {"name": "New York City",  "name_cn": "纽约",            "icao": "KJFK", "country": "US", "slug": "new-york-city", "timezone": "America/New_York", "fahrenheit": True},
+    {"name": "New York City",  "name_cn": "纽约",            "icao": "KLGA", "country": "US", "slug": "new-york-city", "timezone": "America/New_York", "fahrenheit": True},
     {"name": "Dallas",         "name_cn": "达拉斯",          "icao": "KDAL", "country": "US", "slug": "dallas",         "timezone": "America/Chicago",  "fahrenheit": True},
     {"name": "Austin",         "name_cn": "奥斯汀",          "icao": "KAUS", "country": "US", "slug": "austin",         "timezone": "America/Chicago",  "fahrenheit": True},
     {"name": "Los Angeles",    "name_cn": "洛杉矶",          "icao": "KLAX", "country": "US", "slug": "los-angeles",    "timezone": "America/Los_Angeles", "fahrenheit": True},
