@@ -36,6 +36,10 @@ _SESSION.headers.update({"User-Agent": "PolyTempBot/1.0"})
 V1_BASE         = "https://api.weather.com/v1/location/{icao}:9:{country}/observations/historical.json"
 NOAA_BASE       = "https://aviationweather.gov/api/data/metar?ids={icao}&format=raw&taf=false"
 IEM_BASE        = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py"
+# IEM 对短时间大量请求会 429；启动时多城连发易触发，需限速 + 遇 429 退避重试
+IEM_MAX_RETRIES     = 3
+IEM_STARTUP_GAP_SEC = 1.0
+IEM_429_MAX_WAIT_S  = 8.0
 WEATHERAPI_BASE = "http://api.weatherapi.com/v1/current.json"
 AVWX_BASE       = "https://avwx.rest/api/metar/{icao}"
 
@@ -180,10 +184,24 @@ def fetch_and_store_noaa(icao: str) -> tuple:
 
 # ── IEM ASOS 拉取 ─────────────────────────────────────────────────────
 
+def _iem_429_sleep_seconds(response, attempt: int) -> float:
+    """429 时等待：优先 Retry-After，否则指数退避；单次等待不超过 IEM_429_MAX_WAIT_S。"""
+    ra = response.headers.get("Retry-After")
+    if ra:
+        try:
+            w = float(ra)
+            if w > 0:
+                return min(w, IEM_429_MAX_WAIT_S)
+        except ValueError:
+            pass
+    return min(2.0 * (2**attempt), IEM_429_MAX_WAIT_S)
+
+
 def _fetch_iem(icao: str, date_str: str):
     """
     拉取 IEM ASOS CSV（含 METAR + SPECI），返回 (obs_list, error_msg)。
     obs_list 每项：{"obs_time": "YYYY-MM-DD HH:MM:SS", "temperature": float}
+    遇 HTTP 429 时自动退避重试（限流是 IEM 侧常态行为）。
     """
     year, month, day = int(date_str[:4]), int(date_str[5:7]), int(date_str[8:10])
     params = {
@@ -198,12 +216,32 @@ def _fetch_iem(icao: str, date_str: str):
         "year1": year, "month1": month, "day1": day,
         "year2": year, "month2": month, "day2": day,
     }
-    try:
-        resp = _SESSION.get(IEM_BASE, params=params, timeout=15)
-        resp.raise_for_status()
+
+    lines: list[str] = []
+    for attempt in range(IEM_MAX_RETRIES):
+        try:
+            resp = _SESSION.get(IEM_BASE, params=params, timeout=15)
+        except Exception as e:
+            return [], str(e)
+
+        if resp.status_code == 429:
+            if attempt + 1 >= IEM_MAX_RETRIES:
+                return [], f"429 Too Many Requests (已重试 {IEM_MAX_RETRIES} 次): {IEM_BASE}"
+            wait = _iem_429_sleep_seconds(resp, attempt)
+            logger.warning(
+                "[iem] %s 限流 429，%.1f 秒后重试 (%d/%d)",
+                icao, wait, attempt + 1, IEM_MAX_RETRIES,
+            )
+            time.sleep(wait)
+            continue
+
+        try:
+            resp.raise_for_status()
+        except Exception as e:
+            return [], str(e)
+
         lines = resp.text.strip().split("\n")
-    except Exception as e:
-        return [], str(e)
+        break
 
     if len(lines) < 2:
         return [], ""
@@ -349,7 +387,9 @@ def init_iem_all():
     """程序启动时，为所有城市拉取当天 IEM ASOS 全量并写库。"""
     logger.info("[iem] 启动全量初始化，共 %d 个城市", len(CITIES))
     total_new = 0
-    for city in CITIES:
+    for i, city in enumerate(CITIES):
+        if i:
+            time.sleep(IEM_STARTUP_GAP_SEC)
         today = _city_local_date(city)
         inserted, err = fetch_and_store_iem(city, today)
         if err:
