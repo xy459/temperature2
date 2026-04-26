@@ -3,8 +3,9 @@
 运行：python web_obs.py
 访问：http://localhost:5050 与 http://localhost:5050/charts（根路径重定向到 /charts）
 
-启动时：全量拉取各渠道当天数据。
-后台线程：自适应轮询（各渠道 11:00~17:00 本地活跃期，其余时段降频）。
+启动：先建库、立刻监听 HTTP:5050；随后在线程中全量拉取各渠道数据并启轮询。
+启动后短暂时间内图表可能无数据，待后台拉数完成后刷新即可。
+轮询：各渠道城市本地 11:00~17:00 活跃期自适应，其余时段降频。
 """
 import logging
 import re
@@ -36,10 +37,10 @@ _SESSION.headers.update({"User-Agent": "PolyTempBot/1.0"})
 V1_BASE         = "https://api.weather.com/v1/location/{icao}:9:{country}/observations/historical.json"
 NOAA_BASE       = "https://aviationweather.gov/api/data/metar?ids={icao}&format=raw&taf=false"
 IEM_BASE        = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py"
-# IEM 对短时间大量请求会 429；启动时多城连发易触发，需限速 + 遇 429 退避重试
-IEM_MAX_RETRIES     = 3
-IEM_STARTUP_GAP_SEC = 1.0
-IEM_429_MAX_WAIT_S  = 8.0
+# IEM 对短时间大量请求会 429；启动时多城连发易触发，需限速 + 遇 429 固定等待后重试
+IEM_MAX_RETRIES       = 3
+IEM_STARTUP_GAP_SEC   = 1.0
+IEM_429_RETRY_WAIT_S  = 5.0
 WEATHERAPI_BASE = "http://api.weatherapi.com/v1/current.json"
 AVWX_BASE       = "https://avwx.rest/api/metar/{icao}"
 
@@ -184,24 +185,11 @@ def fetch_and_store_noaa(icao: str) -> tuple:
 
 # ── IEM ASOS 拉取 ─────────────────────────────────────────────────────
 
-def _iem_429_sleep_seconds(response, attempt: int) -> float:
-    """429 时等待：优先 Retry-After，否则指数退避；单次等待不超过 IEM_429_MAX_WAIT_S。"""
-    ra = response.headers.get("Retry-After")
-    if ra:
-        try:
-            w = float(ra)
-            if w > 0:
-                return min(w, IEM_429_MAX_WAIT_S)
-        except ValueError:
-            pass
-    return min(2.0 * (2**attempt), IEM_429_MAX_WAIT_S)
-
-
 def _fetch_iem(icao: str, date_str: str):
     """
     拉取 IEM ASOS CSV（含 METAR + SPECI），返回 (obs_list, error_msg)。
     obs_list 每项：{"obs_time": "YYYY-MM-DD HH:MM:SS", "temperature": float}
-    遇 HTTP 429 时自动退避重试（限流是 IEM 侧常态行为）。
+    遇 HTTP 429：等待 IEM_429_RETRY_WAIT_S 秒后再请求，单站最多尝试 IEM_MAX_RETRIES 次。
     """
     year, month, day = int(date_str[:4]), int(date_str[5:7]), int(date_str[8:10])
     params = {
@@ -226,10 +214,10 @@ def _fetch_iem(icao: str, date_str: str):
 
         if resp.status_code == 429:
             if attempt + 1 >= IEM_MAX_RETRIES:
-                return [], f"429 Too Many Requests (已重试 {IEM_MAX_RETRIES} 次): {IEM_BASE}"
-            wait = _iem_429_sleep_seconds(resp, attempt)
+                return [], f"429 Too Many Requests (已尝试 {IEM_MAX_RETRIES} 次): {IEM_BASE}"
+            wait = IEM_429_RETRY_WAIT_S
             logger.warning(
-                "[iem] %s 限流 429，%.1f 秒后重试 (%d/%d)",
+                "[iem] %s 限流 429，%.1f 秒后再请求 (%d/%d)",
                 icao, wait, attempt + 1, IEM_MAX_RETRIES,
             )
             time.sleep(wait)
@@ -1022,18 +1010,24 @@ def index():
 
 # ── 入口 ──────────────────────────────────────────────────────────────
 
+def _background_data_bootstrap() -> None:
+    """在 HTTP 已监听后执行：全量拉取 + 轮询。各 init_* 内部已对单城失败打日志。"""
+    try:
+        init_metar_all()
+        init_noaa_metar_all()
+        init_iem_all()
+        init_weatherapi_all()
+        init_avwx_all()
+    except Exception:
+        logger.exception("后台全量初始化未完整完成，将依赖轮询补数")
+    try:
+        start_poll_thread()
+    except Exception:
+        logger.exception("轮询线程启动失败")
+
+
 if __name__ == "__main__":
     db.init_db()
-
-    # 启动全量初始化（同步，确保首次访问前数据就绪）
-    init_metar_all()
-    init_noaa_metar_all()
-    init_iem_all()
-    init_weatherapi_all()
-    init_avwx_all()
-
-    # 启动后台轮询线程
-    start_poll_thread()
 
     # 过滤外部扫描机器人发来的 TLS 握手包产生的 werkzeug 噪声日志
     class _TLSProbeFilter(logging.Filter):
@@ -1042,5 +1036,11 @@ if __name__ == "__main__":
 
     logging.getLogger("werkzeug").addFilter(_TLSProbeFilter())
 
-    print("启动温度折线图：http://localhost:5050（/ → /charts）")
-    app.run(host="0.0.0.0", port=5050, debug=False)
+    threading.Thread(
+        target=_background_data_bootstrap,
+        name="data-bootstrap",
+        daemon=True,
+    ).start()
+
+    print("已监听 http://0.0.0.0:5050（/ → /charts），后台全量拉取与轮询已排队启动…")
+    app.run(host="0.0.0.0", port=5050, debug=False, use_reloader=False)
