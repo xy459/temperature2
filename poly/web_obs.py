@@ -654,6 +654,9 @@ CHARTS_TEMPLATE = """
     </div>
     <div><button onclick="loadCharts()">查询</button></div>
   </div>
+  <p style="font-size:0.78rem;color:#64748b;margin-top:12px;line-height:1.4;">
+    WeatherAPI、AVWX 数据照常加载，默认不画线；点击各图下方图例可显示或再次隐藏。
+  </p>
 </div>
 
 <div id="charts-container">
@@ -720,11 +723,12 @@ function startChartLocalTimeTicker() {
   _localTimeIntervalId = setInterval(updateChartLocalTimes, 60000);
 }
 
+/* defaultHidden：数据照常拉取；折线初始不画，用户点击图例可切换显示（Chart.js 默认行为） */
 const SERIES_CONFIG = [
-  { key: 'noaa',       label: 'NOAA METAR', color: '#2563eb', width: 1.8, radius: 2.5 },
-  { key: 'wu_metar',   label: 'WU METAR',   color: '#ea580c', width: 1.5, radius: 2   },
-  { key: 'weatherapi', label: 'WeatherAPI', color: '#9333ea', width: 1.5, radius: 2   },
-  { key: 'avwx',       label: 'AVWX',       color: '#0891b2', width: 1.5, radius: 2   },
+  { key: 'noaa',       label: 'NOAA METAR', color: '#2563eb', width: 1.8, radius: 2.5, defaultHidden: false },
+  { key: 'wu_metar',   label: 'WU METAR',   color: '#ea580c', width: 1.5, radius: 2,   defaultHidden: false },
+  { key: 'weatherapi', label: 'WeatherAPI', color: '#9333ea', width: 1.5, radius: 2,   defaultHidden: true },
+  { key: 'avwx',       label: 'AVWX',       color: '#0891b2', width: 1.5, radius: 2,   defaultHidden: true },
 ];
 
 const _chartInstances = [];
@@ -774,6 +778,7 @@ async function loadCharts() {
       return {
         label: cfg.label,
         data: pts,
+        hidden: !!cfg.defaultHidden,
         borderColor: cfg.color,
         backgroundColor: 'transparent',
         borderWidth: cfg.width,
